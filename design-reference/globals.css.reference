@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+/* FOTOFOTO Instant Delivery — brand tokens, matched to the live
+   fotofoto.asia site (sampled colors/fonts) so this product line
+   reads as the same company: near-black ground, orange accent,
+   Archivo display face, IBM Plex Sans body/mono. */
+:root {
+  --color-bg: #000000;
+  --color-panel: #0a0a0b;
+  --color-panel-2: #131315;
+  --color-border: #26262a;
+  --color-text: #edeff1;
+  --color-text-dim: #98a3b1;
+  --color-text-dim-2: #6b7684;
+  --color-gold: #d68a3c;
+  --color-gold-ink: #191308;
+  --color-gold-soft: rgba(214, 138, 60, 0.14);
+  --color-gold-border: rgba(214, 138, 60, 0.35);
+  --color-success: #4ade80;
+  --font-display: "Archivo", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-panel: var(--color-panel);
+  --color-panel-2: var(--color-panel-2);
+  --color-border: var(--color-border);
+  --color-text: var(--color-text);
+  --color-text-dim: var(--color-text-dim);
+  --color-text-dim-2: var(--color-text-dim-2);
+  --color-gold: var(--color-gold);
+  --color-gold-ink: var(--color-gold-ink);
+  --color-success: var(--color-success);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Grid-based gallery, not a fixed column count: a CSS multi-column
+   masonry pins every tile to exactly one column, which is what made
+   this feel rigid ("constrained by 3 columns") and gave a video the
+   same footprint as any other photo. A CSS grid with explicit
+   per-tile spans lets a tile break out — wider, taller, or both — so
+   landscape shots and especially videos read as genuinely bigger
+   tiles, not just taller ones boxed into their own column.
+
+   The rules below are only the PRE-HYDRATION fallback (and the
+   no-JS floor) — once mounted, Gallery.tsx's useMasonrySpans measures
+   the grid's real column width and sets each tile's exact span as an
+   inline style, computed from that photo's actual width/height, so
+   its box always matches its real aspect ratio and nothing gets
+   cropped. Keep MASONRY_ROW_UNIT/MASONRY_GAP in Gallery.tsx in sync
+   with grid-auto-rows/gap here if either changes. */
+.masonry {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-auto-rows: 90px;
+  grid-auto-flow: dense;
+  gap: 8px;
+}
+@media (min-width: 480px) {
+  .masonry { grid-template-columns: repeat(3, 1fr); }
+}
+@media (min-width: 900px) {
+  .masonry { grid-template-columns: repeat(4, 1fr); }
+}
+.masonry-item {
+  display: block;
+  width: 100%;
+  height: 100%;
+  grid-column: span 1;
+  grid-row: span 2; /* default footprint: square/landscape-ish photo */
+}
+.masonry-item[data-orientation="portrait"] {
+  grid-row: span 3;
+}
+.masonry-item[data-orientation="landscape"] {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+/* A video's thumbnail is the whole reason to tap it — give it real
+   room instead of the same tile size as a still photo. Sized ~16:9
+   (2 columns wide, 2 rows tall), not square, so it reads as an actual
+   video frame even before the JS-measured exact span takes over. */
+.masonry-item[data-kind="video"] {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.live-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1.1s linear infinite; }

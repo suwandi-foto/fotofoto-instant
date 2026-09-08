@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/* FOTOFOTO Instant Delivery — brand tokens, matched to the live
+   fotofoto.asia site (sampled colors/fonts) so this product line
+   reads as the same company: near-black ground, orange accent,
+   Archivo display face, IBM Plex Sans body/mono. */
+:root {
+  --color-bg: #000000;
+  --color-panel: #0a0a0b;
+  --color-panel-2: #131315;
+  --color-border: #26262a;
+  --color-text: #edeff1;
+  --color-text-dim: #98a3b1;
+  --color-text-dim-2: #6b7684;
+  --color-gold: #d68a3c;
+  --color-gold-ink: #191308;
+  --color-gold-soft: rgba(214, 138, 60, 0.14);
+  --color-gold-border: rgba(214, 138, 60, 0.35);
+  --color-success: #4ade80;
+  --font-display: "Archivo", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-panel: var(--color-panel);
+  --color-panel-2: var(--color-panel-2);
+  --color-border: var(--color-border);
+  --color-text: var(--color-text);
+  --color-text-dim: var(--color-text-dim);
+  --color-text-dim-2: var(--color-text-dim-2);
+  --color-gold: var(--color-gold);
+  --color-gold-ink: var(--color-gold-ink);
+  --color-success: var(--color-success);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Google Photos-style masonry grid: tiles keep their natural aspect
+   ratio and flow into columns, rather than a uniform square crop. */
+.masonry {
+  column-gap: 8px;
+  column-count: 2;
+}
+@media (min-width: 480px) {
+  .masonry { column-count: 3; }
+}
+@media (min-width: 900px) {
+  .masonry { column-count: 4; }
+}
+.masonry-item {
+  break-inside: avoid;
+  margin-bottom: 8px;
+  display: block;
+  width: 100%;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.live-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1.1s linear infinite; }

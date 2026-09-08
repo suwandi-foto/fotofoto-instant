@@ -1,0 +1,85 @@
+import { db } from "@/db/client";
+import { events as eventsTable } from "@/db/schema";
+import { desc } from "drizzle-orm";
+import Link from "next/link";
+import { NewEventForm } from "./NewEventForm";
+import { DeleteEventButton } from "./DeleteEventButton";
+import { Logo } from "./Logo";
+
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const events = await db.query.events.findMany({ orderBy: desc(eventsTable.createdAt) });
+
+  return (
+    <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-14">
+      <div className="mb-10">
+        <Logo className="text-sm tracking-wide" />
+        <h1 className="font-display mt-3 text-3xl font-semibold">Instant Delivery — control room</h1>
+        <p className="mt-2 text-sm text-text-dim">
+          Create an event to get a QR/link for its gallery, and the shoot link the photographer's
+          app uploads to. This is the working v1 build — no login anywhere, matching the confirmed
+          design.
+        </p>
+      </div>
+
+      <section className="mb-12 rounded-2xl border border-border bg-panel p-6">
+        <h2 className="font-display text-lg font-semibold">New event</h2>
+        <NewEventForm />
+      </section>
+
+      <section>
+        <h2 className="font-display mb-4 text-lg font-semibold">Events</h2>
+        {events.length === 0 ? (
+          <p className="text-sm text-text-dim-2">No events yet — create one above.</p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {events.map((e) => (
+              <li
+                key={e.id}
+                className="flex flex-col gap-3 rounded-xl border border-border bg-panel p-4 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div>
+                  <div className="font-display font-semibold">{e.name}</div>
+                  <div className="text-sm text-text-dim">
+                    {e.clientName} &middot;{" "}
+                    <span className="text-gold">
+                      {e.tier === "full_access" ? "Full access" : `Select (quota ${e.quota})`}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex gap-2 text-sm">
+                  <Link
+                    href={`/e/${e.slug}`}
+                    className="rounded-lg border border-border px-3 py-1.5 hover:border-gold"
+                  >
+                    Gallery
+                  </Link>
+                  <Link
+                    href={`/shoot/${e.slug}`}
+                    className="rounded-lg border border-border px-3 py-1.5 hover:border-gold"
+                  >
+                    Photographer app
+                  </Link>
+                  <Link
+                    href={`/e/${e.slug}/qr`}
+                    className="rounded-sm bg-gold px-3 py-1.5 font-semibold text-gold-ink hover:opacity-90"
+                  >
+                    QR
+                  </Link>
+                  <Link
+                    href={`/control/${e.slug}`}
+                    className="rounded-lg border border-border px-3 py-1.5 hover:border-gold"
+                  >
+                    Presets
+                  </Link>
+                  <DeleteEventButton slug={e.slug} eventName={e.name} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </main>
+  );
+}
