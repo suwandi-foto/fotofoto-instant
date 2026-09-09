@@ -1,9 +1,8 @@
 /**
- * Storage adapter — local disk by default; Cloudflare R2 is the
- * confirmed target for production (zero-egress pricing, which matters
- * a lot here since guests downloading full-res photos is the core
- * product action — swapping this file for an S3-compatible client is
- * the only change needed to go live).
+ * Storage adapter — local disk by default. Set STORAGE_BACKEND=r2 for
+ * Cloudflare R2, the confirmed target for production (zero-egress
+ * pricing, which matters a lot here since guests downloading full-res
+ * photos is the core product action) — see r2.ts.
  *
  * Set STORAGE_BACKEND=drive to instead store everything in a Google
  * Drive account — see googleDrive.ts for what that trades away
@@ -14,7 +13,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const BACKEND = process.env.STORAGE_BACKEND === "drive" ? "drive" : "local";
+const BACKEND =
+  process.env.STORAGE_BACKEND === "drive"
+    ? "drive"
+    : process.env.STORAGE_BACKEND === "r2"
+      ? "r2"
+      : "local";
 
 // Statically scoped to ./storage (per Next's build-tracing guidance —
 // a dynamic/env-driven root causes the whole project to be traced
@@ -31,6 +35,10 @@ export async function putObject(key: string, data: Buffer): Promise<void> {
     const drive = await import("./googleDrive");
     return drive.putObject(key, data);
   }
+  if (BACKEND === "r2") {
+    const r2 = await import("./r2");
+    return r2.putObject(key, data);
+  }
   const filePath = path.join(/* turbopackIgnore: true */ ROOT, key);
   await ensureDir(filePath);
   await fs.writeFile(filePath, data);
@@ -41,6 +49,10 @@ export async function getObject(key: string): Promise<Buffer> {
     const drive = await import("./googleDrive");
     return drive.getObject(key);
   }
+  if (BACKEND === "r2") {
+    const r2 = await import("./r2");
+    return r2.getObject(key);
+  }
   const filePath = path.join(/* turbopackIgnore: true */ ROOT, key);
   return fs.readFile(filePath);
 }
@@ -49,6 +61,10 @@ export async function objectExists(key: string): Promise<boolean> {
   if (BACKEND === "drive") {
     const drive = await import("./googleDrive");
     return drive.objectExists(key);
+  }
+  if (BACKEND === "r2") {
+    const r2 = await import("./r2");
+    return r2.objectExists(key);
   }
   try {
     await fs.access(path.join(/* turbopackIgnore: true */ ROOT, key));
@@ -74,19 +90,25 @@ export function rawUploadKey(eventId: string, uploadId: string) {
   return `raw-uploads/${eventId}/${uploadId}.upload`;
 }
 
-/** Starts a resumable upload session the *browser* can send raw photo
- * bytes to directly, bypassing our own server (and its host platform's
- * request-body size limit — see POST /api/events/[slug]/photos/init).
- * Only meaningful for the Drive backend, which is Google's own
- * upload infrastructure; local disk has no equivalent client-reachable
- * upload target, so this throws for that backend rather than pretend
- * to support it. */
+/** Starts a resumable/session-based upload that the photographer app's
+ * offline queue can send raw photo bytes to in same-origin chunks (see
+ * POST /api/events/[slug]/photos/init) — the queue always uses this
+ * three-step protocol regardless of backend, so both the Drive and R2
+ * backends have to implement it; only local disk has no equivalent
+ * client-reachable upload target and throws instead. For R2 this opens
+ * an S3 multipart upload (see r2.ts); the returned string is an opaque
+ * session token (Drive: the resumable session URL; R2: the multipart
+ * UploadId), meaningful only to uploadChunk below. */
 export async function createResumableUploadSession(key: string, mimeType: string): Promise<string> {
-  if (BACKEND !== "drive") {
-    throw new Error("Chunked upload requires STORAGE_BACKEND=drive.");
+  if (BACKEND === "drive") {
+    const drive = await import("./googleDrive");
+    return drive.createResumableUploadSession(key, mimeType);
   }
-  const drive = await import("./googleDrive");
-  return drive.createResumableUploadSession(key, mimeType);
+  if (BACKEND === "r2") {
+    const r2 = await import("./r2");
+    return r2.createResumableUploadSession(key, mimeType);
+  }
+  throw new Error("Chunked upload requires STORAGE_BACKEND=drive or r2.");
 }
 
 /** Relays one chunk of an upload session (from createResumableUploadSession
@@ -98,11 +120,15 @@ export async function uploadChunk(
   start: number,
   total: number
 ): Promise<{ done: boolean }> {
-  if (BACKEND !== "drive") {
-    throw new Error("Chunked upload requires STORAGE_BACKEND=drive.");
+  if (BACKEND === "drive") {
+    const drive = await import("./googleDrive");
+    return drive.uploadChunk(uploadUrl, chunk, start, total);
   }
-  const drive = await import("./googleDrive");
-  return drive.uploadChunk(uploadUrl, chunk, start, total);
+  if (BACKEND === "r2") {
+    const r2 = await import("./r2");
+    return r2.uploadChunk(uploadUrl, chunk, start, total);
+  }
+  throw new Error("Chunked upload requires STORAGE_BACKEND=drive or r2.");
 }
 
 export function presetReferenceKey(eventId: string, presetId: string) {
@@ -120,6 +146,11 @@ export async function deleteObject(key: string): Promise<void> {
     if (BACKEND === "drive") {
       const drive = await import("./googleDrive");
       await drive.deleteFile(key);
+      return;
+    }
+    if (BACKEND === "r2") {
+      const r2 = await import("./r2");
+      await r2.deleteFile(key);
       return;
     }
     await fs.unlink(path.join(/* turbopackIgnore: true */ ROOT, key));
@@ -141,6 +172,18 @@ export async function deleteEventObjects(eventId: string): Promise<void> {
         await drive.deleteFolder([prefix, eventId]);
       } catch (err) {
         console.warn(`[storage] could not remove Drive folder ${prefix}/${eventId}:`, err);
+      }
+    }
+    return;
+  }
+
+  if (BACKEND === "r2") {
+    const r2 = await import("./r2");
+    for (const prefix of ["originals", "previews", "presets"]) {
+      try {
+        await r2.deleteFolder([prefix, eventId]);
+      } catch (err) {
+        console.warn(`[storage] could not remove R2 objects under ${prefix}/${eventId}:`, err);
       }
     }
     return;

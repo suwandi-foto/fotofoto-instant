@@ -7,14 +7,16 @@ import { generateId } from "@/lib/ids";
 
 /**
  * POST: step 1 of a photo upload. Validates the preset and opens a
- * Google Drive resumable-upload session. The phone then sends the
- * photo to POST /api/events/[slug]/photos/chunk in same-origin pieces
- * (small enough to stay under Vercel's ~4.5MB request body cap, which
- * real camera photos routinely exceed) — that route relays each chunk
- * to the `uploadUrl` this one returns. Once every chunk is sent, the
+ * resumable/session-based upload on the active storage backend (Drive
+ * or R2 — see createResumableUploadSession in storage.ts; local disk
+ * doesn't support this and throws). The phone then sends the photo to
+ * POST /api/events/[slug]/photos/chunk in same-origin pieces (small
+ * enough to stay under a typical host's request-body cap, which real
+ * camera photos routinely exceed) — that route relays each chunk to
+ * the `uploadUrl` this one returns. Once every chunk is sent, the
  * client calls POST /api/events/[slug]/photos/complete with the
  * returned `rawKey` to have the server pull the assembled file back
- * from Drive, apply the preset, and publish the photo.
+ * from storage, apply the preset, and publish the photo.
  */
 export async function POST(
   req: NextRequest,
@@ -47,7 +49,7 @@ export async function POST(
     const uploadUrl = await createResumableUploadSession(rawKey, contentType);
     return NextResponse.json({ uploadUrl, rawKey });
   } catch (err) {
-    console.error("Could not start a Drive upload session", err);
+    console.error("Could not start an upload session", err);
     return NextResponse.json({ error: "Could not start the upload" }, { status: 500 });
   }
 }

@@ -10,6 +10,7 @@
     "drive:auth": "node scripts/drive-auth.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1128.0",
     "@neondatabase/serverless": "^1.1.0",
     "archiver": "^8.0.0",
     "drizzle-kit": "^0.31.10",

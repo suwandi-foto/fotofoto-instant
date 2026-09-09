@@ -32,12 +32,13 @@ async function resolvePresetSpec(
 }
 
 /**
- * POST: step 2 of a photo upload, called once the phone's direct PUT
- * to the Drive session from POST .../photos/init has finished. Pulls
- * the raw bytes back down from Drive (an outbound fetch by our own
- * server, not an inbound request body, so it isn't subject to
- * Vercel's ~4.5MB body cap), applies the preset, and publishes the
- * photo exactly as the old single-request upload used to.
+ * POST: step 2 of a photo upload, called once every chunk from POST
+ * .../photos/chunk has been relayed to the session opened by POST
+ * .../photos/init. Pulls the raw bytes back out of storage (an
+ * outbound read by our own server, not an inbound request body, so
+ * it isn't subject to any host's request-body cap), applies the
+ * preset, and publishes the photo exactly as the old single-request
+ * upload used to.
  */
 export async function POST(
   req: NextRequest,

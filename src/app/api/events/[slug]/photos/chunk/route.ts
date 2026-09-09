@@ -3,12 +3,12 @@ import { getEventBySlug } from "@/lib/queries";
 import { uploadChunk } from "@/lib/storage";
 
 /**
- * POST: relays one same-origin chunk of a photo upload to the Drive
- * session opened by POST /api/events/[slug]/photos/init. Kept
- * same-origin deliberately — see init's doc comment — rather than
- * having the browser PUT to Drive directly, and kept small
- * deliberately — a few MB per chunk — to stay under Vercel's ~4.5MB
- * request body cap.
+ * POST: relays one same-origin chunk of a photo upload to the storage
+ * session opened by POST /api/events/[slug]/photos/init (Drive or R2 —
+ * see uploadChunk in storage.ts). Kept same-origin deliberately — see
+ * init's doc comment — rather than having the browser upload directly
+ * to the backend, and kept small deliberately — a few MB per chunk —
+ * to stay under a typical host's request body cap.
  */
 export async function POST(
   req: NextRequest,
@@ -43,7 +43,7 @@ export async function POST(
     const result = await uploadChunk(uploadUrl, chunkBuf, start, total);
     return NextResponse.json(result);
   } catch (err) {
-    console.error("Chunk relay to Drive failed", err);
+    console.error("Chunk relay failed", err);
     return NextResponse.json({ error: "Could not upload this chunk" }, { status: 500 });
   }
 }
