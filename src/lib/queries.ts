@@ -8,13 +8,21 @@ import {
   presetEnum,
   feedback,
   referrals,
+  clients,
+  clientContacts,
+  authTokens,
+  photoAnnotations,
+  photoReactions,
+  videoNotes,
+  videoReviews,
   type Tier,
   type Preset,
   type PresetId,
   type FeedbackScoreSegment,
+  type VideoReviewStatus,
 } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
-import { generateId, generateSlug, generateVoucherCode } from "./ids";
+import { eq, and, asc, desc, isNull } from "drizzle-orm";
+import { generateId, generateSlug, generateVoucherCode, generateAuthToken } from "./ids";
 import type { ColorStats } from "./image";
 
 export async function createEvent(input: {
@@ -59,7 +67,9 @@ export async function deleteEvent(eventId: string) {
 
 export async function listEventPhotos(eventId: string) {
   return db.query.photos.findMany({
-    where: and(eq(photos.eventId, eventId), eq(photos.status, "live")),
+    // kind = "photo" excludes video rows, which don't belong in the
+    // photo gallery grid — see Video Review, which lists those itself.
+    where: and(eq(photos.eventId, eventId), eq(photos.status, "live"), eq(photos.kind, "photo")),
     orderBy: desc(photos.uploadedAt),
   });
 }
@@ -277,4 +287,240 @@ export async function createReferral(input: {
     }
   }
   throw new Error("Could not generate a unique voucher code.");
+}
+
+export async function getClientById(id: string) {
+  const row = await db.query.clients.findFirst({ where: eq(clients.id, id) });
+  return row ?? null;
+}
+
+/** Dev-only path for now — see POST /api/dev/contacts. A real
+ * "FOTOFOTO staff adds a client contact" UI is future work. */
+export async function createClient(input: { companyName: string; opsClientId?: string | null }) {
+  const id = generateId();
+  await db.insert(clients).values({
+    id,
+    companyName: input.companyName,
+    opsClientId: input.opsClientId ?? null,
+  });
+  return getClientById(id);
+}
+
+export async function getContactById(id: string) {
+  const row = await db.query.clientContacts.findFirst({ where: eq(clientContacts.id, id) });
+  return row ?? null;
+}
+
+export async function getContactByEmail(email: string) {
+  const row = await db.query.clientContacts.findFirst({
+    where: eq(clientContacts.email, email.toLowerCase()),
+  });
+  return row ?? null;
+}
+
+export async function createClientContact(input: {
+  clientId: string;
+  name: string;
+  department: string;
+  email: string;
+}) {
+  const id = generateId();
+  await db.insert(clientContacts).values({
+    id,
+    clientId: input.clientId,
+    name: input.name,
+    department: input.department,
+    email: input.email.toLowerCase(),
+  });
+  return getContactById(id);
+}
+
+export async function listClientEvents(clientId: string) {
+  return db.query.events.findMany({
+    where: eq(events.clientId, clientId),
+    orderBy: desc(events.createdAt),
+  });
+}
+
+// Matches design-reference/Main.dc.html's "Archives after 2 weeks"
+// copy for the client library. Events have no separate "event date"
+// field, so this is proxied off createdAt.
+const EVENT_ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** Pulled out of the library page's render body — calling Date.now()
+ * directly in a Server Component's render is flagged as an impure
+ * render by this repo's eslint react-hooks/purity rule. */
+export function isEventArchived(createdAt: string): boolean {
+  return Date.now() - new Date(createdAt).getTime() > EVENT_ARCHIVE_AFTER_MS;
+}
+
+const AUTH_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes, same window as the rest of this pass's magic link
+
+export async function createAuthToken(contactId: string) {
+  const id = generateId();
+  const token = generateAuthToken();
+  const expiresAt = new Date(Date.now() + AUTH_TOKEN_TTL_MS).toISOString();
+  await db.insert(authTokens).values({ id, contactId, token, expiresAt });
+  return { token, expiresAt };
+}
+
+/**
+ * Atomically single-use-consumes a token: the UPDATE only matches a
+ * row that hasn't been consumed yet, so two concurrent requests for
+ * the same token can never both succeed (no separate check-then-act
+ * race). Expiry is checked afterward — an expired token still ends up
+ * marked consumed (so it can never be retried either way) but is
+ * rejected here same as an unknown or already-used one.
+ */
+export async function consumeAuthToken(token: string) {
+  const [consumed] = await db
+    .update(authTokens)
+    .set({ consumedAt: new Date().toISOString() })
+    .where(and(eq(authTokens.token, token), isNull(authTokens.consumedAt)))
+    .returning();
+
+  if (!consumed) return null;
+  if (new Date(consumed.expiresAt).getTime() < Date.now()) return null;
+
+  return getContactById(consumed.contactId);
+}
+
+/** Chronological (oldest-first) so the pin number shown in the photo
+ * (1, 2, 3, ...) matches the order notes appear in the list below it. */
+export async function listPhotoAnnotations(photoId: string) {
+  return db.query.photoAnnotations.findMany({
+    where: eq(photoAnnotations.photoId, photoId),
+    orderBy: asc(photoAnnotations.createdAt),
+    with: { contact: true },
+  });
+}
+
+export async function createPhotoAnnotation(input: {
+  photoId: string;
+  contactId: string;
+  xPct: number;
+  yPct: number;
+  note: string;
+}) {
+  const id = generateId();
+  await db.insert(photoAnnotations).values({
+    id,
+    photoId: input.photoId,
+    contactId: input.contactId,
+    xPct: input.xPct,
+    yPct: input.yPct,
+    note: input.note,
+  });
+  return id;
+}
+
+export async function getPhotoReactionSummary(photoId: string, contactId: string | null) {
+  // Reactions per photo are bounded by how many contacts a client has
+  // (a handful, not a viral audience), so loading every row to count
+  // and check membership is simpler than a separate aggregate query
+  // and plenty fast at this scale.
+  const rows = await db.query.photoReactions.findMany({
+    where: eq(photoReactions.photoId, photoId),
+  });
+  return {
+    count: rows.length,
+    liked: contactId != null && rows.some((r) => r.contactId === contactId),
+  };
+}
+
+/** Toggle is a plain check-then-act, made safe against a double-tap
+ * race by the table's (photo_id, contact_id) unique index: if two
+ * requests both see "not yet liked" and both try to insert, the
+ * second's insert hits 23505 and is treated as "already liked" rather
+ * than surfaced as an error. */
+export async function togglePhotoReaction(photoId: string, contactId: string) {
+  const existing = await db.query.photoReactions.findFirst({
+    where: and(eq(photoReactions.photoId, photoId), eq(photoReactions.contactId, contactId)),
+  });
+
+  if (existing) {
+    await db.delete(photoReactions).where(eq(photoReactions.id, existing.id));
+  } else {
+    try {
+      await db.insert(photoReactions).values({ id: generateId(), photoId, contactId });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "23505") throw err;
+    }
+  }
+
+  return getPhotoReactionSummary(photoId, contactId);
+}
+
+/** Chronological by in-video timestamp (not createdAt) so notes line
+ * up with their marks left-to-right along the scrub bar. */
+export async function listVideoNotes(photoId: string) {
+  return db.query.videoNotes.findMany({
+    where: eq(videoNotes.photoId, photoId),
+    orderBy: asc(videoNotes.timestampSeconds),
+    with: { contact: true },
+  });
+}
+
+export async function createVideoNote(input: {
+  photoId: string;
+  contactId: string;
+  timestampSeconds: number;
+  note: string;
+}) {
+  const id = generateId();
+  await db.insert(videoNotes).values({
+    id,
+    photoId: input.photoId,
+    contactId: input.contactId,
+    timestampSeconds: input.timestampSeconds,
+    note: input.note,
+  });
+  return id;
+}
+
+/** A video's review row is created lazily on first read/write rather
+ * than at upload time — there's no upload pipeline to hook that into
+ * yet (see README.md's video note). */
+export async function getOrCreateVideoReview(photoId: string) {
+  const existing = await db.query.videoReviews.findFirst({
+    where: eq(videoReviews.photoId, photoId),
+    with: { decidedBy: true },
+  });
+  if (existing) return existing;
+
+  await db.insert(videoReviews).values({ photoId }).onConflictDoNothing({
+    target: videoReviews.photoId,
+  });
+  return (await db.query.videoReviews.findFirst({
+    where: eq(videoReviews.photoId, photoId),
+    with: { decidedBy: true },
+  }))!;
+}
+
+/**
+ * Records the client's decision, but only once: the UPDATE is
+ * conditioned on the row still being `awaiting_notes`, so a race
+ * between two contacts deciding at once can't leave the row in an
+ * inconsistent state, and a second decision attempt after the first
+ * has already landed is rejected (returns null) rather than silently
+ * overwriting it. There's no staff/admin auth model in this app to
+ * carve out a legitimate "override" actor, so once decided, it's
+ * final from here.
+ */
+export async function decideVideoReview(
+  photoId: string,
+  contactId: string,
+  decision: "approve" | "revise"
+) {
+  await getOrCreateVideoReview(photoId);
+
+  const status: VideoReviewStatus = decision === "approve" ? "approved" : "revision_requested";
+  const [updated] = await db
+    .update(videoReviews)
+    .set({ status, decidedAt: new Date().toISOString(), decidedByContactId: contactId })
+    .where(and(eq(videoReviews.photoId, photoId), eq(videoReviews.status, "awaiting_notes")))
+    .returning();
+
+  return updated ?? null;
 }

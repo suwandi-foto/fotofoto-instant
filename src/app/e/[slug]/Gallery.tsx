@@ -477,6 +477,15 @@ export function Gallery({
           {isSelectTier && !finalized && (
             <p className="text-xs text-text-dim-2">Tap the circle in the corner to select this photo</p>
           )}
+          <Link
+            href={`/e/${slug}/photo/${lightboxPhoto.id}`}
+            className="flex items-center gap-2 rounded-md border border-border px-5 py-3 font-bold text-text hover:border-gold"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20.8 4.6c-1.6-1.6-4.2-1.6-5.8 0L12 7.6l-3-3c-1.6-1.6-4.2-1.6-5.8 0-1.6 1.6-1.6 4.2 0 5.8l8.8 8.8 8.8-8.8c1.6-1.6 1.6-4.2 0-5.8Z" />
+            </svg>
+            Notes &amp; reactions
+          </Link>
           {(!isSelectTier || (finalized && (selection?.selectedPhotoIds.includes(lightboxPhoto.id) ?? false))) && (
             <a
               href={lightboxPhoto.downloadUrl}

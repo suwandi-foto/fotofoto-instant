@@ -7,7 +7,7 @@
  * JS-side type a plain string everywhere the app already expects one,
  * with no dialect-specific default-expression casting to worry about.
  */
-import { pgTable, text, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, boolean, doublePrecision, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 const isoNow = () => new Date().toISOString();
@@ -43,6 +43,12 @@ export const events = pgTable("events", {
   slug: text("slug").notNull().unique(), // short id used in the QR/link URL
   name: text("name").notNull(),
   clientName: text("client_name").notNull(),
+  // Nullable: structured link to the `clients` table below, for events
+  // whose client has a logged-in contact (Photo Detail/Video Review).
+  // `clientName` above stays as the studio's free-text label and is
+  // not derived from this — plenty of events have no client contact
+  // at all and only ever use the QR/link, which is staying intact.
+  clientId: text("client_id").references(() => clients.id),
   tier: text("tier", { enum: tierEnum }).notNull(),
   quota: integer("quota").notNull().default(0), // only meaningful for tier = select
   extraUnitNote: text("extra_unit_note").default(
@@ -59,11 +65,16 @@ export const events = pgTable("events", {
     .$defaultFn(isoNow),
 });
 
+export const photoKindEnum = ["photo", "video"] as const;
+export type PhotoKind = (typeof photoKindEnum)[number];
+
 /**
- * A single captured, processed photo belonging to one event.
- * - previewPath: compressed rendition (~1000px, WebP), what every
- *   gallery view loads. For select-tier events this is additionally
- *   watermarked at generation time.
+ * A single captured, processed photo (or video — see `kind`) belonging
+ * to one event.
+ * - previewPath: compressed rendition (~1000px WebP for a photo; for a
+ *   video, a low-res watermarked file — see the video transcoding
+ *   pipeline note in README.md, not built as of this table's addition).
+ *   What every gallery view loads.
  * - originalPath: untouched full-resolution file. Only ever served by
  *   the download endpoints, never embedded directly in a gallery page.
  */
@@ -72,6 +83,7 @@ export const photos = pgTable("photos", {
   eventId: text("event_id")
     .notNull()
     .references(() => events.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: photoKindEnum }).notNull().default("photo"),
   preset: text("preset").notNull(), // a Preset id, or "custom:<customPresets.id>"
   status: text("status", { enum: photoStatusEnum }).notNull().default("queued"),
   originalPath: text("original_path"), // set once the original is stored
@@ -136,6 +148,193 @@ export const selectionItems = pgTable("selection_items", {
     .$defaultFn(isoNow),
 });
 
+/**
+ * Minimal client record for gating login and grouping events/contacts
+ * in *this* app. Deliberately NOT a mirror of the CRM's Client entity
+ * in the separate fotofoto-ops codebase (company/deal/relationship
+ * data lives there) — `opsClientId` is just a loose, nullable
+ * cross-reference for later, so this table doesn't grow into a second
+ * database that needs reconciling with that one.
+ */
+export const clients = pgTable("clients", {
+  id: text("id").primaryKey(),
+  companyName: text("company_name").notNull(),
+  opsClientId: text("ops_client_id"), // nullable future cross-reference to fotofoto-ops
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
+/**
+ * A named individual at a client who can log in (Photo Detail pin
+ * annotations, Video Review notes need to show *who* left a note).
+ * `department` is free text, not an enum — whatever the client calls
+ * their own team ("Marketing," "Sales," "Ops," ...).
+ */
+export const clientContacts = pgTable("client_contacts", {
+  id: text("id").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  department: text("department").notNull(),
+  email: text("email").notNull().unique(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
+/**
+ * Single-use magic-link token for the passwordless login flow — no
+ * passwords anywhere in this app. `consumedAt` is set the moment a
+ * token is redeemed so it can never be replayed, independent of
+ * `expiresAt`.
+ */
+export const authTokens = pgTable("auth_tokens", {
+  id: text("id").primaryKey(),
+  contactId: text("contact_id")
+    .notNull()
+    .references(() => clientContacts.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  expiresAt: text("expires_at").notNull(),
+  consumedAt: text("consumed_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
+/**
+ * A pinned note on one exact spot of a photo — Photo Detail's
+ * annotation feature. `xPct`/`yPct` (0-100) are relative to the
+ * image's own dimensions, not pixels, so a pin stays correctly placed
+ * regardless of what size the photo happens to render at.
+ */
+export const photoAnnotations = pgTable("photo_annotations", {
+  id: text("id").primaryKey(),
+  photoId: text("photo_id")
+    .notNull()
+    .references(() => photos.id, { onDelete: "cascade" }),
+  contactId: text("contact_id")
+    .notNull()
+    .references(() => clientContacts.id, { onDelete: "cascade" }),
+  xPct: doublePrecision("x_pct").notNull(),
+  yPct: doublePrecision("y_pct").notNull(),
+  note: text("note").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
+/**
+ * A contact's heart reaction on a photo. One row per (photo, contact)
+ * — toggling removes the row rather than ever inserting a second one,
+ * enforced at the DB level so a race can't produce a duplicate.
+ */
+export const photoReactions = pgTable(
+  "photo_reactions",
+  {
+    id: text("id").primaryKey(),
+    photoId: text("photo_id")
+      .notNull()
+      .references(() => photos.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => clientContacts.id, { onDelete: "cascade" }),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(isoNow),
+  },
+  (table) => [uniqueIndex("photo_reactions_photo_contact_unique").on(table.photoId, table.contactId)]
+);
+
+export const photoAnnotationsRelations = relations(photoAnnotations, ({ one }) => ({
+  photo: one(photos, { fields: [photoAnnotations.photoId], references: [photos.id] }),
+  contact: one(clientContacts, {
+    fields: [photoAnnotations.contactId],
+    references: [clientContacts.id],
+  }),
+}));
+
+export const photoReactionsRelations = relations(photoReactions, ({ one }) => ({
+  photo: one(photos, { fields: [photoReactions.photoId], references: [photos.id] }),
+  contact: one(clientContacts, {
+    fields: [photoReactions.contactId],
+    references: [clientContacts.id],
+  }),
+}));
+
+/**
+ * A timestamped revision note on a draft video (`photos.kind =
+ * 'video'`) — Video Review's equivalent of Photo Detail's pinned
+ * annotations, keyed by playback time instead of an x/y point.
+ */
+export const videoNotes = pgTable("video_notes", {
+  id: text("id").primaryKey(),
+  photoId: text("photo_id")
+    .notNull()
+    .references(() => photos.id, { onDelete: "cascade" }),
+  contactId: text("contact_id")
+    .notNull()
+    .references(() => clientContacts.id, { onDelete: "cascade" }),
+  timestampSeconds: doublePrecision("timestamp_seconds").notNull(),
+  note: text("note").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
+export const videoReviewStatusEnum = ["awaiting_notes", "revision_requested", "approved"] as const;
+export type VideoReviewStatus = (typeof videoReviewStatusEnum)[number];
+
+/**
+ * The client's decision on one draft video — at most one row per
+ * video, keyed directly by `photoId` (no separate id; a video has
+ * exactly zero or one review, so the foreign key doubles as the
+ * primary key, same as `selections` doubles as one-per-event but with
+ * an owned id there instead — this table has no need for a second
+ * identity). Starts `awaiting_notes` implicitly: a row is created
+ * lazily on first read/write rather than at video-upload time, since
+ * there's no upload pipeline to hook that into yet (see README.md).
+ */
+export const videoReviews = pgTable("video_reviews", {
+  photoId: text("photo_id")
+    .primaryKey()
+    .references(() => photos.id, { onDelete: "cascade" }),
+  status: text("status", { enum: videoReviewStatusEnum }).notNull().default("awaiting_notes"),
+  decidedAt: text("decided_at"),
+  decidedByContactId: text("decided_by_contact_id").references(() => clientContacts.id),
+});
+
+export const videoNotesRelations = relations(videoNotes, ({ one }) => ({
+  photo: one(photos, { fields: [videoNotes.photoId], references: [photos.id] }),
+  contact: one(clientContacts, { fields: [videoNotes.contactId], references: [clientContacts.id] }),
+}));
+
+export const videoReviewsRelations = relations(videoReviews, ({ one }) => ({
+  photo: one(photos, { fields: [videoReviews.photoId], references: [photos.id] }),
+  decidedBy: one(clientContacts, {
+    fields: [videoReviews.decidedByContactId],
+    references: [clientContacts.id],
+  }),
+}));
+
+export const clientsRelations = relations(clients, ({ many }) => ({
+  contacts: many(clientContacts),
+  events: many(events),
+}));
+
+export const clientContactsRelations = relations(clientContacts, ({ one, many }) => ({
+  client: one(clients, { fields: [clientContacts.clientId], references: [clients.id] }),
+  authTokens: many(authTokens),
+}));
+
+export const authTokensRelations = relations(authTokens, ({ one }) => ({
+  contact: one(clientContacts, {
+    fields: [authTokens.contactId],
+    references: [clientContacts.id],
+  }),
+}));
+
 export const customPresetsRelations = relations(customPresets, ({ one }) => ({
   event: one(events, { fields: [customPresets.eventId], references: [events.id] }),
 }));
@@ -143,6 +342,10 @@ export const customPresetsRelations = relations(customPresets, ({ one }) => ({
 export const photosRelations = relations(photos, ({ one, many }) => ({
   event: one(events, { fields: [photos.eventId], references: [events.id] }),
   selectionItems: many(selectionItems),
+  annotations: many(photoAnnotations),
+  reactions: many(photoReactions),
+  videoNotes: many(videoNotes),
+  videoReview: one(videoReviews, { fields: [photos.id], references: [videoReviews.photoId] }),
 }));
 
 export const selectionsRelations = relations(selections, ({ one, many }) => ({
@@ -207,6 +410,7 @@ export const eventsRelations = relations(events, ({ many, one }) => ({
     fields: [events.id],
     references: [selections.eventId],
   }),
+  client: one(clients, { fields: [events.clientId], references: [clients.id] }),
 }));
 
 export const feedbackRelations = relations(feedback, ({ one, many }) => ({
