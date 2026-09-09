@@ -5,7 +5,21 @@ import Link from "next/link";
  * scoped down to plain links (no session/auto-login into fotofoto-ops
  * — that's the confirmed single-sign-on non-goal for this pass, and
  * no live ACTR/Communication-Health data is fetched here since that
- * screen and its scoring now live entirely in fotofoto-ops).
+ * screen and its scoring now live entirely in fotofoto-ops — see
+ * mcmm_sessions / communication_health_data in that repo's app.py,
+ * shared between its staff Client Detail page and its own client
+ * portal so the two views can never disagree).
+ *
+ * Communication Health is gated on the client's relationshipStage
+ * (Growth Partner+ only, per the confirmed scoping) — a Foundation
+ * client sees a locked/upsell card instead of a link. The card links
+ * to fotofoto-ops's own portal dashboard, which requires a *separate*
+ * ops-portal login (no SSO); an earlier version of this link pointed
+ * at /portal/projects/<opsClientId> as if that id were a project id
+ * owned by whoever happened to already be logged into that portal,
+ * which 404s for anyone else — this points at the portal's login/
+ * dashboard entry point instead, which is the honest "the real thing
+ * lives over there" link given no SSO exists.
  */
 
 function CardShell({
@@ -88,19 +102,24 @@ const heartIcon = (
   </svg>
 );
 
-export function CommunicationHealthCard({ opsClientId }: { opsClientId: string | null }) {
-  const href = opsClientId
-    ? `https://fotofoto-ops.vercel.app/portal/projects/${opsClientId}`
-    : null;
+export function CommunicationHealthCard({
+  opsClientId,
+  relationshipStage,
+}: {
+  opsClientId: string | null;
+  relationshipStage: "foundation" | "growth_partner" | "enterprise";
+}) {
+  const entitled = relationshipStage !== "foundation";
+  const href = entitled && opsClientId ? "https://fotofoto-ops.vercel.app/portal" : null;
+
+  const subtitle = !entitled
+    ? "Upgrade to Growth Partner to see your ACTR score and roadmap"
+    : href
+      ? "See your ACTR score and roadmap"
+      : "Not yet connected";
 
   return (
-    <CardShell
-      icon={pulseIcon}
-      title="Communication Health"
-      subtitle={href ? "See your ACTR score and roadmap" : "Not yet connected"}
-      href={href}
-      external
-    />
+    <CardShell icon={pulseIcon} title="Communication Health" subtitle={subtitle} href={href} external />
   );
 }
 

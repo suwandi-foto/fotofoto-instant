@@ -4,6 +4,7 @@ import { createResumableUploadSession, rawUploadKey } from "@/lib/storage";
 import { presetEnum } from "@/db/schema";
 import { parseCustomPresetRef } from "@/lib/presetMeta";
 import { generateId } from "@/lib/ids";
+import { isVideoContentType } from "@/lib/video";
 
 /**
  * POST: step 1 of a photo upload. Validates the preset and opens a
@@ -30,17 +31,22 @@ export async function POST(
   const presetRaw = typeof body?.preset === "string" ? body.preset : "";
   const contentType = typeof body?.contentType === "string" && body.contentType ? body.contentType : "image/jpeg";
 
-  const customId = parseCustomPresetRef(presetRaw);
-  if (customId) {
-    const custom = await getCustomPreset(customId);
-    if (!custom || custom.eventId !== event.id) {
-      return NextResponse.json({ error: `Unknown custom preset '${presetRaw}'.` }, { status: 400 });
+  // Presets are a photo-only concept (color grading) — a video upload
+  // skips this validation entirely rather than being forced to supply
+  // a meaningless one.
+  if (!isVideoContentType(contentType)) {
+    const customId = parseCustomPresetRef(presetRaw);
+    if (customId) {
+      const custom = await getCustomPreset(customId);
+      if (!custom || custom.eventId !== event.id) {
+        return NextResponse.json({ error: `Unknown custom preset '${presetRaw}'.` }, { status: 400 });
+      }
+    } else if (!presetEnum.find((p) => p === presetRaw)) {
+      return NextResponse.json(
+        { error: `Missing/invalid 'preset' field. Expected one of: ${presetEnum.join(", ")}, or a custom:<id>.` },
+        { status: 400 }
+      );
     }
-  } else if (!presetEnum.find((p) => p === presetRaw)) {
-    return NextResponse.json(
-      { error: `Missing/invalid 'preset' field. Expected one of: ${presetEnum.join(", ")}, or a custom:<id>.` },
-      { status: 400 }
-    );
   }
 
   const rawKey = rawUploadKey(event.id, generateId());

@@ -87,7 +87,12 @@ export const photos = pgTable("photos", {
   preset: text("preset").notNull(), // a Preset id, or "custom:<customPresets.id>"
   status: text("status", { enum: photoStatusEnum }).notNull().default("queued"),
   originalPath: text("original_path"), // set once the original is stored
-  previewPath: text("preview_path"), // set once the preview is generated
+  previewPath: text("preview_path"), // set once the preview is generated (photo: WebP image; video: watermarked low-res MP4)
+  // Video-only: a single still frame (JPEG) for the gallery grid tile —
+  // previewPath for a video is playable media, not something an <img>
+  // can render, so the grid needs a separate static thumbnail. Always
+  // null for kind = "photo" (previewPath already is an image there).
+  thumbnailPath: text("thumbnail_path"),
   width: integer("width"),
   height: integer("height"),
   orientation: text("orientation"), // "portrait" | "landscape" | "square" — drives the masonry tile ratio
@@ -156,10 +161,22 @@ export const selectionItems = pgTable("selection_items", {
  * cross-reference for later, so this table doesn't grow into a second
  * database that needs reconciling with that one.
  */
+export const relationshipStageEnum = ["foundation", "growth_partner", "enterprise"] as const;
+export type RelationshipStage = (typeof relationshipStageEnum)[number];
+
 export const clients = pgTable("clients", {
   id: text("id").primaryKey(),
   companyName: text("company_name").notNull(),
   opsClientId: text("ops_client_id"), // nullable future cross-reference to fotofoto-ops
+  // Gates the Communication Health card (see EntryCards.tsx) — that
+  // page lives entirely in fotofoto-ops (real MCMM/ACTR data already
+  // exists there; see that repo's mcmm_sessions/communication_health_data),
+  // so this only controls whether this app treats the client as
+  // entitled to it, not any data about the score itself. Staff-set only
+  // (see POST /api/dev/contacts) — no client-facing editor, by design.
+  relationshipStage: text("relationship_stage", { enum: relationshipStageEnum })
+    .notNull()
+    .default("foundation"),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(isoNow),
@@ -278,6 +295,11 @@ export const videoNotes = pgTable("video_notes", {
     .references(() => clientContacts.id, { onDelete: "cascade" }),
   timestampSeconds: doublePrecision("timestamp_seconds").notNull(),
   note: text("note").notNull(),
+  // Set by staff from the admin video-notes view once they've acted on
+  // this note — lets that view show only what's still outstanding
+  // across events, instead of every note ever left. Never set by the
+  // client; this is purely an internal triage flag.
+  addressedAt: text("addressed_at"),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(isoNow),
@@ -378,6 +400,11 @@ export const feedback = pgTable("feedback", {
   score: integer("score").notNull(), // 0-10
   segment: text("segment", { enum: feedbackScoreSegmentEnum }).notNull(),
   tags: text("tags").notNull(), // JSON string[] of picked tag labels
+  // Optional open-text field — the tag chips don't always capture what
+  // someone wants to say. For a promoter, this takes priority over the
+  // tags-composed sentence in testimonialText (see composeTestimonial's
+  // caller) rather than being a second, separately-read field.
+  freeText: text("free_text"),
   testimonialText: text("testimonial_text"), // composed quote, promoters only
   testimonialConsent: boolean("testimonial_consent").notNull().default(false),
   createdAt: text("created_at").notNull().$defaultFn(isoNow),
@@ -422,3 +449,21 @@ export const referralsRelations = relations(referrals, ({ one }) => ({
   feedback: one(feedback, { fields: [referrals.feedbackId], references: [feedback.id] }),
   event: one(events, { fields: [referrals.eventId], references: [events.id] }),
 }));
+
+/**
+ * A free-text note from FOTOFOTO staff, meant for the CEO to review —
+ * the internal-facing counterpart to client NPS feedback above.
+ * `fotofoto-ops` (the separate CRM app) has a real equivalent of this
+ * already (a feedback_requests table + a CEO-only review page), so this
+ * mirrors that shape rather than inventing a different mechanism;
+ * there's no VS Code file-based log involved on either side. Staff auth
+ * here is a single shared password (see src/lib/staffSession.ts), not
+ * per-person accounts, so `authorLabel` is free text the submitter
+ * types in rather than a real identity reference.
+ */
+export const adminFeedback = pgTable("admin_feedback", {
+  id: text("id").primaryKey(),
+  authorLabel: text("author_label").notNull(),
+  text: text("text").notNull(),
+  createdAt: text("created_at").notNull().$defaultFn(isoNow),
+});

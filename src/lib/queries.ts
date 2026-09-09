@@ -15,11 +15,14 @@ import {
   photoReactions,
   videoNotes,
   videoReviews,
+  adminFeedback,
   type Tier,
   type Preset,
   type PresetId,
+  type PhotoKind,
   type FeedbackScoreSegment,
   type VideoReviewStatus,
+  type RelationshipStage,
 } from "@/db/schema";
 import { eq, and, asc, desc, isNull } from "drizzle-orm";
 import { generateId, generateSlug, generateVoucherCode, generateAuthToken } from "./ids";
@@ -78,9 +81,27 @@ export async function getPhoto(photoId: string) {
   return db.query.photos.findFirst({ where: eq(photos.id, photoId) });
 }
 
-export async function createQueuedPhoto(eventId: string, preset: PresetId) {
+/**
+ * Same lookup as getPhoto, plus the owning event's clientId — every
+ * logged-in-only photo/video route (annotations, reactions, video
+ * notes, video decisions) needs this to check that the calling contact
+ * actually belongs to the client this photo's event is linked to, not
+ * just that *some* contact is logged in. Without it, any logged-in
+ * contact could read or write another client's annotations/notes/
+ * decisions by guessing a photo/video id — see the client-scoping pass
+ * this was added under.
+ */
+export async function getPhotoWithEventClientId(photoId: string) {
+  const photo = await db.query.photos.findFirst({
+    where: eq(photos.id, photoId),
+    with: { event: { columns: { clientId: true } } },
+  });
+  return photo ?? null;
+}
+
+export async function createQueuedPhoto(eventId: string, preset: PresetId, kind: PhotoKind = "photo") {
   const id = generateId();
-  await db.insert(photos).values({ id, eventId, preset, status: "queued" });
+  await db.insert(photos).values({ id, eventId, preset, kind, status: "queued" });
   return id;
 }
 
@@ -92,6 +113,7 @@ export async function markPhotoLive(
     width: number;
     height: number;
     orientation: string;
+    thumbnailPath?: string;
   }
 ) {
   await db
@@ -103,9 +125,45 @@ export async function markPhotoLive(
       width: data.width,
       height: data.height,
       orientation: data.orientation,
+      ...(data.thumbnailPath ? { thumbnailPath: data.thumbnailPath } : {}),
       uploadedAt: new Date().toISOString(),
     })
     .where(eq(photos.id, photoId));
+}
+
+/** Video-only intermediate state: the original file and a grid
+ * thumbnail are stored (both fast), but the watermarked preview
+ * rendition is still transcoding in the background (see POST
+ * .../photos/complete's after() call) — markPhotoLive finishes the
+ * job once that's done, or markPhotoFailed if it errors out. */
+export async function markPhotoProcessing(
+  photoId: string,
+  data: { originalPath: string; thumbnailPath: string; width: number; height: number; orientation: string }
+) {
+  await db
+    .update(photos)
+    .set({
+      status: "processing",
+      originalPath: data.originalPath,
+      thumbnailPath: data.thumbnailPath,
+      width: data.width,
+      height: data.height,
+      orientation: data.orientation,
+      uploadedAt: new Date().toISOString(),
+    })
+    .where(eq(photos.id, photoId));
+}
+
+/** Live videos for an event's gallery — kept separate from
+ * listEventPhotos (which stays photo-only) rather than merging the two
+ * kinds into one query/array, so the existing select-tier
+ * quota/selection logic (photo-only) never has to account for videos
+ * mixed into its counts. */
+export async function listEventVideos(eventId: string) {
+  return db.query.photos.findMany({
+    where: and(eq(photos.eventId, eventId), eq(photos.status, "live"), eq(photos.kind, "video")),
+    orderBy: desc(photos.uploadedAt),
+  });
 }
 
 export async function markPhotoFailed(photoId: string) {
@@ -237,6 +295,7 @@ export async function createFeedback(input: {
   score: number;
   segment: FeedbackScoreSegment;
   tags: string[];
+  freeText?: string | null;
   testimonialText?: string | null;
   testimonialConsent?: boolean;
 }) {
@@ -247,6 +306,7 @@ export async function createFeedback(input: {
     score: input.score,
     segment: input.segment,
     tags: JSON.stringify(input.tags),
+    freeText: input.freeText ?? null,
     testimonialText: input.testimonialText ?? null,
     testimonialConsent: input.testimonialConsent ?? false,
   });
@@ -296,14 +356,23 @@ export async function getClientById(id: string) {
 
 /** Dev-only path for now — see POST /api/dev/contacts. A real
  * "FOTOFOTO staff adds a client contact" UI is future work. */
-export async function createClient(input: { companyName: string; opsClientId?: string | null }) {
+export async function createClient(input: {
+  companyName: string;
+  opsClientId?: string | null;
+  relationshipStage?: RelationshipStage;
+}) {
   const id = generateId();
   await db.insert(clients).values({
     id,
     companyName: input.companyName,
     opsClientId: input.opsClientId ?? null,
+    relationshipStage: input.relationshipStage ?? "foundation",
   });
   return getClientById(id);
+}
+
+export async function setClientRelationshipStage(clientId: string, stage: RelationshipStage) {
+  await db.update(clients).set({ relationshipStage: stage }).where(eq(clients.id, clientId));
 }
 
 export async function getContactById(id: string) {
@@ -523,4 +592,59 @@ export async function decideVideoReview(
     .returning();
 
   return updated ?? null;
+}
+
+/** Staff-only — see POST /api/admin/feedback and schema.ts's
+ * adminFeedback comment. */
+export async function createAdminFeedback(input: { authorLabel: string; text: string }) {
+  const id = generateId();
+  await db.insert(adminFeedback).values({ id, authorLabel: input.authorLabel, text: input.text });
+  return db.query.adminFeedback.findFirst({ where: eq(adminFeedback.id, id) });
+}
+
+export async function listAdminFeedback() {
+  return db.query.adminFeedback.findMany({ orderBy: desc(adminFeedback.createdAt) });
+}
+
+/**
+ * Every video with at least one un-addressed revision note, across
+ * every event — the admin triage view's whole reason for existing (see
+ * /admin/video-notes): today a staff member would otherwise have to
+ * open each event/video individually to find these. Loads all
+ * candidate videos + their pending notes in two queries rather than
+ * one per video, since the number of in-review videos at once is small.
+ */
+export async function listVideosWithPendingNotes() {
+  const pendingNotes = await db.query.videoNotes.findMany({
+    where: isNull(videoNotes.addressedAt),
+    orderBy: asc(videoNotes.timestampSeconds),
+    with: { contact: true },
+  });
+  if (pendingNotes.length === 0) return [];
+
+  const videoIds = [...new Set(pendingNotes.map((n) => n.photoId))];
+  const videoRows = await db.query.photos.findMany({
+    where: and(eq(photos.kind, "video")),
+    with: { event: true },
+  });
+  const byId = new Map(videoRows.map((v) => [v.id, v]));
+
+  const grouped = new Map<string, typeof pendingNotes>();
+  for (const note of pendingNotes) {
+    if (!byId.has(note.photoId)) continue; // note on a deleted/non-video row
+    const list = grouped.get(note.photoId) ?? [];
+    list.push(note);
+    grouped.set(note.photoId, list);
+  }
+
+  return videoIds
+    .filter((id) => byId.has(id) && grouped.has(id))
+    .map((id) => ({ video: byId.get(id)!, notes: grouped.get(id)! }));
+}
+
+export async function markVideoNoteAddressed(noteId: string) {
+  await db
+    .update(videoNotes)
+    .set({ addressedAt: new Date().toISOString() })
+    .where(eq(videoNotes.id, noteId));
 }

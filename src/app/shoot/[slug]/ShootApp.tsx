@@ -243,7 +243,7 @@ export function ShootApp({
         <input
           ref={cameraInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,video/*"
           capture="environment"
           multiple
           className="hidden"
@@ -252,7 +252,7 @@ export function ShootApp({
         <input
           ref={libraryInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,video/*"
           multiple
           className="hidden"
           onChange={(e) => onFilesSelected(e.target.files)}

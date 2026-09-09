@@ -343,7 +343,7 @@ async function drainQueueOnce(onChange?: () => void): Promise<void> {
       await postJson(
         "finishing upload",
         `/api/events/${item.eventSlug}/photos/complete`,
-        { preset: item.preset, rawKey },
+        { preset: item.preset, rawKey, contentType },
         controller.signal
       );
 

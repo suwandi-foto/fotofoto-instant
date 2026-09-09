@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getPhoto, decideVideoReview } from "@/lib/queries";
+import { getPhotoWithEventClientId, decideVideoReview } from "@/lib/queries";
 import { getCurrentContact, formatAuthorName } from "@/lib/session";
 
 const Body = z.object({ decision: z.enum(["approve", "revise"]) });
@@ -13,8 +13,8 @@ export async function POST(
   if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
-  const photo = await getPhoto(id);
-  if (!photo || photo.kind !== "video") {
+  const photo = await getPhotoWithEventClientId(id);
+  if (!photo || photo.kind !== "video" || photo.event.clientId !== contact.clientId) {
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
   }
 

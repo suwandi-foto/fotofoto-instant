@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseCustomPresetRef } from "@/lib/presetMeta";
+import { ZoomableImage } from "./ZoomableImage";
 
 type BuiltinPreset = { id: string; name: string; swatch: string; enabled: boolean };
 type CustomPreset = { id: string; name: string; enabled: boolean; previewUrl: string };
@@ -142,8 +143,7 @@ export function PresetsManager({ slug }: { slug: string }) {
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {custom.map((c) => (
               <div key={c.id} className="flex flex-col items-center gap-2 rounded border border-border p-3" style={{ opacity: c.enabled ? 1 : 0.45 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={c.previewUrl} alt="" className="aspect-square w-full rounded-sm object-cover" />
+                <ZoomableImage src={c.previewUrl} alt={c.name} className="aspect-square w-full rounded-sm object-cover" />
                 <span className="text-center text-xs font-semibold">{c.name}</span>
                 <div className="flex items-center gap-2">
                   <input

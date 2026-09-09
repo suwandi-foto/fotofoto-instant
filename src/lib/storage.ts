@@ -86,6 +86,26 @@ export function previewKey(eventId: string, photoId: string) {
   return `previews/${eventId}/${photoId}.webp`;
 }
 
+// Video counterparts of originalKey/previewKey above — same
+// originals/previews prefixes (so deleteEventObjects' per-prefix
+// folder delete still catches them), different extensions since a
+// video's original keeps its real container format instead of being
+// forced to .jpg, and its preview is playable media (mp4), not an
+// image. See video.ts's ProcessedVideo and the thumbnail note on
+// schema.ts's photos.thumbnailPath for why a video also needs a third,
+// still-image key the gallery grid can put in an <img>.
+export function videoOriginalKey(eventId: string, photoId: string) {
+  return `originals/${eventId}/${photoId}.mp4`;
+}
+
+export function videoPreviewKey(eventId: string, photoId: string) {
+  return `previews/${eventId}/${photoId}-preview.mp4`;
+}
+
+export function videoThumbnailKey(eventId: string, photoId: string) {
+  return `previews/${eventId}/${photoId}-thumb.jpg`;
+}
+
 export function rawUploadKey(eventId: string, uploadId: string) {
   return `raw-uploads/${eventId}/${uploadId}.upload`;
 }

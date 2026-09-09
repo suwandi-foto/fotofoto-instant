@@ -29,6 +29,10 @@ export default async function PhotoDetailPage({
 
   const event = await getEventBySlug(slug);
   if (!event) notFound();
+  // Being logged in only proves *a* client contact's identity, not
+  // that this contact owns *this* event — see the matching check on
+  // Video Review's page.tsx for the full rationale.
+  if (event.clientId !== contact.clientId) notFound();
 
   const photo = await getPhoto(id);
   if (!photo || photo.eventId !== event.id) notFound();

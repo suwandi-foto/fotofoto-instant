@@ -3,13 +3,26 @@ import {
   getEventBySlug,
   createQueuedPhoto,
   markPhotoLive,
+  markPhotoProcessing,
   markPhotoFailed,
   getCustomPreset,
 } from "@/lib/queries";
 import { processCapturedPhoto, type PresetSpec, type ColorStats } from "@/lib/image";
-import { getObject, putObject, deleteObject, originalKey, previewKey } from "@/lib/storage";
-import { presetEnum } from "@/db/schema";
+import { extractVideoMeta, transcodeVideoPreview, isVideoContentType } from "@/lib/video";
+import {
+  getObject,
+  putObject,
+  deleteObject,
+  originalKey,
+  previewKey,
+  videoOriginalKey,
+  videoPreviewKey,
+  videoThumbnailKey,
+} from "@/lib/storage";
+import { presetEnum, events } from "@/db/schema";
 import { parseCustomPresetRef } from "@/lib/presetMeta";
+
+type Event = typeof events.$inferSelect;
 
 async function resolvePresetSpec(
   eventId: string,
@@ -31,28 +44,7 @@ async function resolvePresetSpec(
   return { spec: { kind: "builtin", id: builtin } };
 }
 
-/**
- * POST: step 2 of a photo upload, called once every chunk from POST
- * .../photos/chunk has been relayed to the session opened by POST
- * .../photos/init. Pulls the raw bytes back out of storage (an
- * outbound read by our own server, not an inbound request body, so
- * it isn't subject to any host's request-body cap), applies the
- * preset, and publishes the photo exactly as the old single-request
- * upload used to.
- */
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ slug: string }> }
-) {
-  const { slug } = await params;
-  const event = await getEventBySlug(slug);
-  if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
-
-  const body = await req.json().catch(() => null);
-  const presetRaw = typeof body?.preset === "string" ? body.preset : "";
-  const rawKey = typeof body?.rawKey === "string" ? body.rawKey : "";
-  if (!rawKey) return NextResponse.json({ error: "Missing 'rawKey' field" }, { status: 400 });
-
+async function completePhoto(event: Event, rawKey: string, presetRaw: string) {
   const resolved = await resolvePresetSpec(event.id, presetRaw);
   if ("error" in resolved) {
     return NextResponse.json({ error: resolved.error }, { status: 400 });
@@ -63,6 +55,7 @@ export async function POST(
   try {
     const raw = await getObject(rawKey);
     if (raw.length === 0) {
+      await markPhotoFailed(photoId);
       return NextResponse.json(
         { error: "The uploaded photo file is empty (0 bytes) — capture may have failed." },
         { status: 400 }
@@ -106,4 +99,114 @@ export async function POST(
     console.error("Photo processing failed", err);
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
+}
+
+/**
+ * Video counterpart of completePhoto above. Only the fast half of the
+ * pipeline (probe + thumbnail) runs inline — the original and
+ * thumbnail are stored and the row flips to "processing" before this
+ * responds, so the client gets an immediate ack instead of blocking on
+ * a full transcode. The slow half (transcodeVideoPreview) runs via
+ * after(), same pattern deleteObject(rawKey) already used below it for
+ * photos — Hostinger's persistent Node process keeps running it to
+ * completion after the response is sent, unlike a serverless function
+ * that would need Vercel's after()-keeps-alive guarantee instead.
+ */
+async function completeVideo(event: Event, rawKey: string) {
+  const photoId = await createQueuedPhoto(event.id, "original", "video");
+
+  try {
+    const raw = await getObject(rawKey);
+    if (raw.length === 0) {
+      await markPhotoFailed(photoId);
+      return NextResponse.json(
+        { error: "The uploaded video file is empty (0 bytes) — capture may have failed." },
+        { status: 400 }
+      );
+    }
+
+    const meta = await extractVideoMeta(raw);
+
+    const oKey = videoOriginalKey(event.id, photoId);
+    const tKey = videoThumbnailKey(event.id, photoId);
+    await putObject(oKey, raw);
+    await putObject(tKey, meta.thumbnail);
+
+    await markPhotoProcessing(photoId, {
+      originalPath: oKey,
+      thumbnailPath: tKey,
+      width: meta.width,
+      height: meta.height,
+      orientation: meta.orientation,
+    });
+
+    // The raw upload's own temp copy is no longer needed — `raw` is
+    // already in memory for the background transcode below.
+    after(() => deleteObject(rawKey));
+
+    after(async () => {
+      try {
+        const watermark = event.tier === "select";
+        const preview = await transcodeVideoPreview(raw, meta, watermark);
+        const pKey = videoPreviewKey(event.id, photoId);
+        await putObject(pKey, preview);
+        await markPhotoLive(photoId, {
+          originalPath: oKey,
+          previewPath: pKey,
+          width: meta.width,
+          height: meta.height,
+          orientation: meta.orientation,
+          thumbnailPath: tKey,
+        });
+      } catch (err) {
+        console.error("Video preview transcode failed", err);
+        await markPhotoFailed(photoId);
+      }
+    });
+
+    return NextResponse.json(
+      {
+        photo: {
+          id: photoId,
+          status: "processing",
+          thumbnailUrl: `/api/photos/${photoId}/thumbnail`,
+          videoReviewUrl: `/e/${event.slug}/video/${photoId}`,
+        },
+      },
+      { status: 201 }
+    );
+  } catch (err) {
+    await markPhotoFailed(photoId);
+    console.error("Video processing failed", err);
+    return NextResponse.json({ error: "Processing failed" }, { status: 500 });
+  }
+}
+
+/**
+ * POST: step 2 of an upload, called once every chunk from POST
+ * .../photos/chunk has been relayed to the session opened by POST
+ * .../photos/init. Pulls the raw bytes back out of storage (an
+ * outbound read by our own server, not an inbound request body, so
+ * it isn't subject to any host's request-body cap), branches on
+ * contentType (see photos/init's matching branch) to either the photo
+ * or video pipeline, and publishes the result.
+ */
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await params;
+  const event = await getEventBySlug(slug);
+  if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
+
+  const body = await req.json().catch(() => null);
+  const presetRaw = typeof body?.preset === "string" ? body.preset : "";
+  const rawKey = typeof body?.rawKey === "string" ? body.rawKey : "";
+  const contentType = typeof body?.contentType === "string" ? body.contentType : "";
+  if (!rawKey) return NextResponse.json({ error: "Missing 'rawKey' field" }, { status: 400 });
+
+  if (isVideoContentType(contentType)) {
+    return completeVideo(event, rawKey);
+  }
+  return completePhoto(event, rawKey, presetRaw);
 }

@@ -59,7 +59,10 @@ export default async function LibraryPage() {
       </div>
 
       <div className="flex flex-col gap-2.5">
-        <CommunicationHealthCard opsClientId={client?.opsClientId ?? null} />
+        <CommunicationHealthCard
+          opsClientId={client?.opsClientId ?? null}
+          relationshipStage={client?.relationshipStage ?? "foundation"}
+        />
         <FeedbackCard latestEventSlug={latestEventSlug} />
       </div>
     </main>

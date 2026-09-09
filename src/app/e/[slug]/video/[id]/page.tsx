@@ -28,6 +28,14 @@ export default async function VideoReviewPage({
 
   const event = await getEventBySlug(slug);
   if (!event) notFound();
+  // Being logged in only proves *a* client contact's identity, not
+  // that this contact owns *this* event — without this check, any
+  // logged-in contact could reach and annotate another client's
+  // video by guessing/copying a slug+id (see the client-scoping pass
+  // this page's queries were audited under). An event with no linked
+  // client (clientId null — guest/QR-only) has no legitimate owner
+  // here either, so it 404s the same way.
+  if (event.clientId !== contact.clientId) notFound();
 
   const photo = await getPhoto(id);
   if (!photo || photo.eventId !== event.id || photo.kind !== "video") notFound();

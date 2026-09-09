@@ -32,6 +32,7 @@ export function FeedbackFlow({
 }) {
   const [score, setScore] = useState<number | null>(null);
   const [selectedTags, setSelectedTags] = useState<Record<string, boolean>>({});
+  const [freeText, setFreeText] = useState("");
   const [consent, setConsent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +52,7 @@ export function FeedbackFlow({
   function pickScore(v: number) {
     setScore(v);
     setSelectedTags({});
+    setFreeText("");
     setConsent(false);
     setResult(null);
     setError(null);
@@ -72,7 +74,12 @@ export function FeedbackFlow({
       const res = await fetch(`/api/events/${slug}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ score, tags: pickedTags, testimonialConsent: consent }),
+        body: JSON.stringify({
+          score,
+          tags: pickedTags,
+          freeText: freeText.trim() || undefined,
+          testimonialConsent: consent,
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not send feedback");
       const data = await res.json();
@@ -129,7 +136,16 @@ export function FeedbackFlow({
     : "#";
 
   const segmentCopy = segment ? SEGMENT_COPY[segment] : null;
-  const testimonialPreview = pickedTags.length > 0 ? composeTestimonial(pickedTags) : null;
+  // A promoter's own words take priority over the tags-composed
+  // sentence, same rule the server applies when it saves
+  // testimonialText — see POST /api/events/[slug]/feedback.
+  const trimmedFreeText = freeText.trim();
+  const testimonialPreview =
+    trimmedFreeText.length > 0
+      ? trimmedFreeText
+      : pickedTags.length > 0
+        ? composeTestimonial(pickedTags)
+        : null;
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col pb-10">
@@ -221,6 +237,20 @@ export function FeedbackFlow({
                 );
               })}
             </div>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-bold text-text-dim-2">
+                Anything else you&apos;d like to say? (optional)
+              </span>
+              <textarea
+                value={freeText}
+                onChange={(e) => setFreeText(e.target.value)}
+                maxLength={2000}
+                rows={3}
+                placeholder="In your own words…"
+                className="rounded-xl border border-border bg-panel-2 px-3.5 py-3 text-sm text-text placeholder:text-text-dim-2 focus:border-gold focus:outline-none"
+              />
+            </label>
 
             {segment === "promoter" && testimonialPreview && (
               <div className="flex flex-col gap-1.5 rounded-xl border border-gold/35 bg-panel-2 p-3">

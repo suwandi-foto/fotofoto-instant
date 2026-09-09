@@ -6,6 +6,7 @@ import { segmentForScore, TAGS_BY_SEGMENT, composeTestimonial } from "@/lib/feed
 const Body = z.object({
   score: z.number().int().min(0).max(10),
   tags: z.array(z.string().min(1)).default([]),
+  freeText: z.string().trim().max(2000).optional(),
   testimonialConsent: z.boolean().optional(),
 });
 
@@ -21,7 +22,7 @@ export async function POST(
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { score, testimonialConsent } = parsed.data;
+  const { score, testimonialConsent, freeText } = parsed.data;
   const segment = segmentForScore(score);
 
   // Only tags that belong to this segment's own set are accepted —
@@ -30,13 +31,18 @@ export async function POST(
   const allowedTags = new Set(TAGS_BY_SEGMENT[segment]);
   const tags = parsed.data.tags.filter((t) => allowedTags.has(t));
 
-  const testimonialText = segment === "promoter" ? composeTestimonial(tags) : null;
+  // A promoter's own words take priority over the tags-composed
+  // sentence when they wrote something — see composeTestimonial's
+  // caller note in schema.ts's feedback.freeText comment.
+  const testimonialText =
+    segment === "promoter" ? (freeText && freeText.length > 0 ? freeText : composeTestimonial(tags)) : null;
 
   const row = await createFeedback({
     eventId: event.id,
     score,
     segment,
     tags,
+    freeText: freeText || null,
     testimonialText,
     testimonialConsent,
   });

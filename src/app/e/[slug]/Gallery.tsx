@@ -19,6 +19,13 @@ type SelectionState = {
   selectedPhotoIds: string[];
 };
 
+type VideoItem = {
+  id: string;
+  thumbnailUrl: string;
+  reviewUrl: string;
+  orientation: "portrait" | "landscape" | "square" | null;
+};
+
 const ratioFor = (orientation: PhotoItem["orientation"]) => {
   switch (orientation) {
     case "portrait":
@@ -44,6 +51,7 @@ export function Gallery({
   };
 }) {
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
+  const [videos, setVideos] = useState<VideoItem[]>([]);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   // Which photo ids currently have an in-flight toggle request. A Set
   // (not a single id) because a photographer/client tapping several
@@ -63,8 +71,9 @@ export function Gallery({
   const [lightboxId, setLightboxId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [photosRes, eventRes] = await Promise.all([
+    const [photosRes, videosRes, eventRes] = await Promise.all([
       fetch(`/api/events/${slug}/photos`, { cache: "no-store" }),
+      fetch(`/api/events/${slug}/videos`, { cache: "no-store" }),
       initialEvent.tier === "select"
         ? fetch(`/api/events/${slug}`, { cache: "no-store" })
         : Promise.resolve(null),
@@ -72,6 +81,10 @@ export function Gallery({
     if (photosRes.ok) {
       const data = await photosRes.json();
       setPhotos(data.photos);
+    }
+    if (videosRes.ok) {
+      const data = await videosRes.json();
+      setVideos(data.videos);
     }
     if (eventRes && eventRes.ok) {
       const data = await eventRes.json();
@@ -242,6 +255,37 @@ export function Gallery({
           </svg>
         </Link>
       </div>
+
+      {/* Draft videos — kept separate from the photo grid (see
+          listEventVideos' doc comment); not part of select-tier
+          quota/selection at all. */}
+      {videos.length > 0 && (
+        <div className="flex flex-col gap-2.5 px-5 pt-4">
+          <div className="text-xs font-bold uppercase tracking-wide text-text-dim">Draft videos</div>
+          <div className="flex gap-2.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+            {videos.map((v) => (
+              <Link
+                key={v.id}
+                href={v.reviewUrl}
+                className="relative h-28 w-44 flex-shrink-0 overflow-hidden rounded-xl bg-panel-2"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={v.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/25">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/55">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff">
+                      <path d="M8 5v14l11-7Z" />
+                    </svg>
+                  </span>
+                </div>
+                <span className="absolute left-1.5 top-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide text-text">
+                  VIDEO
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Grid */}
       <div className="masonry flex-1 px-5 py-4">
@@ -471,6 +515,26 @@ export function Gallery({
               </svg>
             </button>
           )}
+
+          {/* Download now sits on the photo itself (bottom-right),
+              matching the grid thumbnail's overlay treatment, rather
+              than living in the bottom action bar — same gating as
+              before: full-access always, select-tier only once
+              finalized and this photo was picked. */}
+          {(!isSelectTier || (finalized && (selection?.selectedPhotoIds.includes(lightboxPhoto.id) ?? false))) && (
+            <a
+              href={lightboxPhoto.downloadUrl}
+              aria-label="Download full resolution"
+              title="Download full resolution"
+              className="absolute bottom-3 right-3 flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-text hover:bg-black/70 sm:bottom-4 sm:right-4"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v13" />
+                <path d="m7 11 5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
+            </a>
+          )}
         </div>
 
         <div className="flex items-center justify-center gap-3 p-5" onClick={(e) => e.stopPropagation()}>
@@ -486,19 +550,6 @@ export function Gallery({
             </svg>
             Notes &amp; reactions
           </Link>
-          {(!isSelectTier || (finalized && (selection?.selectedPhotoIds.includes(lightboxPhoto.id) ?? false))) && (
-            <a
-              href={lightboxPhoto.downloadUrl}
-              className="flex items-center gap-2 rounded-md border border-border px-5 py-3 font-bold text-text hover:border-gold"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 3v13" />
-                <path d="m7 11 5 5 5-5" />
-                <path d="M5 21h14" />
-              </svg>
-              Download
-            </a>
-          )}
         </div>
       </div>
     )}

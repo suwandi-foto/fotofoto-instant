@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getPhoto, listVideoNotes, createVideoNote } from "@/lib/queries";
+import { getPhotoWithEventClientId, listVideoNotes, createVideoNote } from "@/lib/queries";
 import { getCurrentContact, formatAuthorName } from "@/lib/session";
+import type { CurrentContact } from "@/lib/session";
 
-async function getVideoOr404(id: string) {
-  const photo = await getPhoto(id);
-  if (!photo || photo.kind !== "video") return null;
+async function getOwnedVideoOr404(id: string, contact: CurrentContact) {
+  const photo = await getPhotoWithEventClientId(id);
+  if (!photo || photo.kind !== "video" || photo.event.clientId !== contact.clientId) return null;
   return photo;
 }
 
@@ -17,7 +18,7 @@ export async function GET(
   if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
-  const video = await getVideoOr404(id);
+  const video = await getOwnedVideoOr404(id, contact);
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   const rows = await listVideoNotes(id);
@@ -45,7 +46,7 @@ export async function POST(
   if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
-  const video = await getVideoOr404(id);
+  const video = await getOwnedVideoOr404(id, contact);
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   const parsed = Body.safeParse(await req.json().catch(() => null));
