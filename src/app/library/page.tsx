@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { Logo } from "@/app/Logo";
-import { getCurrentContact } from "@/lib/session";
+import { getCurrentClient } from "@/lib/session";
 import { listClientEvents, getClientById, isEventArchived } from "@/lib/queries";
 import { LogoutButton } from "./LogoutButton";
 import { EventLibrary } from "./EventLibrary";
@@ -9,19 +9,19 @@ import { CommunicationHealthCard, FeedbackCard } from "./EntryCards";
 export const dynamic = "force-dynamic";
 
 /**
- * The client-contact home screen after login: their event library,
- * plus link-outs to Communication Health and Feedback/NPS (both of
- * which live in the separate fotofoto-ops app — see EntryCards.tsx).
- * The Shop row (Calendar/Wall Print/Timeline) from the mockup is
- * skipped — commerce isn't built anywhere in this project yet.
+ * The client home screen after login: their event library, plus
+ * link-outs to Communication Health and Feedback/NPS (both of which
+ * live in the separate fotofoto-ops app — see EntryCards.tsx). The
+ * Shop row (Calendar/Wall Print/Timeline) from the mockup is skipped —
+ * commerce isn't built anywhere in this project yet.
  */
 export default async function LibraryPage() {
-  const contact = await getCurrentContact();
-  if (!contact) redirect("/login");
+  const session = await getCurrentClient();
+  if (!session) redirect("/login");
 
   const [client, events] = await Promise.all([
-    getClientById(contact.clientId),
-    listClientEvents(contact.clientId),
+    getClientById(session.clientId),
+    listClientEvents(session.clientId),
   ]);
 
   const eventRows = events.map((e) => ({
@@ -49,9 +49,6 @@ export default async function LibraryPage() {
         <h1 className="font-display text-2xl font-semibold">
           {client?.companyName ?? "Your account"}
         </h1>
-        <p className="mt-1 text-sm text-text-dim">
-          {contact.name} · {contact.department}
-        </p>
       </div>
 
       <div className="mb-8">

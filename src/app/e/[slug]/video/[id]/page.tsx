@@ -1,20 +1,19 @@
 import { notFound, redirect } from "next/navigation";
 import { getEventBySlug, getPhoto, listVideoNotes, getOrCreateVideoReview } from "@/lib/queries";
-import { getCurrentContact, formatAuthorName } from "@/lib/session";
+import { getCurrentClient } from "@/lib/session";
 import { VideoReviewView } from "./VideoReviewView";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Video Review — timestamped notes, approve/revise. Behind the
- * client-contact login, same as Photo Detail. NOTE: this app has no
- * real video transcoding/watermarking pipeline yet (flagged in the
- * delivery brief as the biggest remaining engineering lift), so
- * `photo.previewPath` is never actually set on a video row — the
- * player below points at the real intended URL
- * (/api/videos/[id]/preview) and falls back to a static placeholder
- * when it can't load, rather than blocking this screen's data
- * model/UI on that pipeline landing first.
+ * Video Review — timestamped notes, approve/revise. Behind the client
+ * login, same as Photo Detail. NOTE: this app has no real video
+ * transcoding/watermarking pipeline yet (flagged in the delivery brief
+ * as the biggest remaining engineering lift), so `photo.previewPath`
+ * is never actually set on a video row — the player below points at
+ * the real intended URL (/api/videos/[id]/preview) and falls back to a
+ * static placeholder when it can't load, rather than blocking this
+ * screen's data model/UI on that pipeline landing first.
  */
 export default async function VideoReviewPage({
   params,
@@ -23,19 +22,19 @@ export default async function VideoReviewPage({
 }) {
   const { slug, id } = await params;
 
-  const contact = await getCurrentContact();
-  if (!contact) redirect("/login");
+  const session = await getCurrentClient();
+  if (!session) redirect("/login");
 
   const event = await getEventBySlug(slug);
   if (!event) notFound();
-  // Being logged in only proves *a* client contact's identity, not
-  // that this contact owns *this* event — without this check, any
-  // logged-in contact could reach and annotate another client's
-  // video by guessing/copying a slug+id (see the client-scoping pass
-  // this page's queries were audited under). An event with no linked
-  // client (clientId null — guest/QR-only) has no legitimate owner
-  // here either, so it 404s the same way.
-  if (event.clientId !== contact.clientId) notFound();
+  // Being logged in only proves *a* client's identity, not that this
+  // client owns *this* event — without this check, any logged-in
+  // client could reach and annotate another client's video by
+  // guessing/copying a slug+id (see the client-scoping pass this
+  // page's queries were audited under). An event with no linked client
+  // (clientId null — guest/QR-only) has no legitimate owner here
+  // either, so it 404s the same way.
+  if (event.clientId !== session.clientId) notFound();
 
   const photo = await getPhoto(id);
   if (!photo || photo.eventId !== event.id || photo.kind !== "video") notFound();
@@ -49,12 +48,7 @@ export default async function VideoReviewPage({
     id: row.id,
     timestampSeconds: row.timestampSeconds,
     note: row.note,
-    author: formatAuthorName(row.contactId, row.contact.name, contact.contactId),
   }));
-
-  const decidedByName = review.decidedBy
-    ? formatAuthorName(review.decidedBy.id, review.decidedBy.name, contact.contactId)
-    : null;
 
   return (
     <VideoReviewView
@@ -64,7 +58,7 @@ export default async function VideoReviewPage({
       previewUrl={`/api/videos/${id}/preview`}
       initialNotes={notes}
       initialStatus={review.status}
-      initialDecidedByName={decidedByName}
+      initialDecidedAt={review.decidedAt}
     />
   );
 }

@@ -9,7 +9,6 @@ type Annotation = {
   xPct: number;
   yPct: number;
   note: string;
-  author: string;
 };
 
 export function PhotoDetailView({
@@ -234,8 +233,7 @@ export function PhotoDetailView({
                 {a.number}
               </div>
               <div>
-                <div className="text-xs font-bold">{a.author}</div>
-                <div className="mt-0.5 text-xs leading-relaxed text-text-dim">{a.note}</div>
+                <div className="text-xs leading-relaxed text-text-dim">{a.note}</div>
               </div>
             </button>
           ))

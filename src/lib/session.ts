@@ -1,14 +1,14 @@
 /**
- * Client-contact session cookie: signed (not encrypted — it carries
- * no secret, just ids) with HMAC-SHA256 so a client can't forge or
- * edit it, using only Node's built-in `crypto` rather than pulling in
- * a JWT/session library for two fields.
+ * Client session cookie: signed (not encrypted — it carries no secret,
+ * just an id) with HMAC-SHA256 so a client can't forge or edit it,
+ * using only Node's built-in `crypto` rather than pulling in a
+ * JWT/session library for one field.
  */
 import { cookies } from "next/headers";
 import { createHmac, timingSafeEqual } from "crypto";
-import { getContactById } from "./queries";
+import { getClientById } from "./queries";
 
-const SESSION_COOKIE_NAME = "ff_contact_session";
+const SESSION_COOKIE_NAME = "ff_client_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 // Checked lazily (inside sign(), not at module load) so a production
@@ -28,7 +28,6 @@ function getSessionSecret(): string {
 }
 
 type SessionPayload = {
-  contactId: string;
   clientId: string;
   exp: number; // epoch ms
 };
@@ -57,7 +56,7 @@ function decodeSession(raw: string): SessionPayload | null {
 
   try {
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SessionPayload;
-    if (typeof payload.contactId !== "string" || typeof payload.clientId !== "string") return null;
+    if (typeof payload.clientId !== "string") return null;
     if (payload.exp < Date.now()) return null;
     return payload;
   } catch {
@@ -65,11 +64,10 @@ function decodeSession(raw: string): SessionPayload | null {
   }
 }
 
-/** Sets the session cookie after a successful token consume. */
-export async function createSession(contactId: string, clientId: string) {
+/** Sets the session cookie after a successful access-code check. */
+export async function createSession(clientId: string) {
   const cookieStore = await cookies();
   const payload: SessionPayload = {
-    contactId,
     clientId,
     exp: Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
   };
@@ -87,20 +85,17 @@ export async function clearSession() {
   cookieStore.delete(SESSION_COOKIE_NAME);
 }
 
-export type CurrentContact = {
-  contactId: string;
+export type CurrentClient = {
   clientId: string;
-  name: string;
-  department: string;
 };
 
 /**
  * Every protected route/page's entry point for "who's logged in."
- * Re-reads the contact row rather than trusting name/department out
- * of the cookie, so an edited contact record takes effect immediately
- * instead of only after the next login.
+ * Re-reads the client row rather than trusting the cookie's payload
+ * beyond the id, so a deactivated/changed client takes effect
+ * immediately instead of only after the next login.
  */
-export async function getCurrentContact(): Promise<CurrentContact | null> {
+export async function getCurrentClient(): Promise<CurrentClient | null> {
   const cookieStore = await cookies();
   const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!raw) return null;
@@ -108,28 +103,8 @@ export async function getCurrentContact(): Promise<CurrentContact | null> {
   const session = decodeSession(raw);
   if (!session) return null;
 
-  const contact = await getContactById(session.contactId);
-  if (!contact || contact.clientId !== session.clientId) return null;
+  const client = await getClientById(session.clientId);
+  if (!client) return null;
 
-  return {
-    contactId: contact.id,
-    clientId: contact.clientId,
-    name: contact.name,
-    department: contact.department,
-  };
-}
-
-/**
- * The "You" convention used everywhere a comment/note/reaction shows
- * its author (Photo Detail pins, Video Review notes, ...): the
- * currently logged-in contact sees their own name as "You" instead of
- * their real name, matching design-reference/PhotoDetail.dc.html and
- * VideoReview.dc.html.
- */
-export function formatAuthorName(
-  authorContactId: string,
-  authorName: string,
-  currentContactId: string | null | undefined
-): string {
-  return currentContactId != null && authorContactId === currentContactId ? "You" : authorName;
+  return { clientId: client.id };
 }

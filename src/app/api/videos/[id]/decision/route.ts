@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getPhotoWithEventClientId, decideVideoReview } from "@/lib/queries";
-import { getCurrentContact, formatAuthorName } from "@/lib/session";
+import { getCurrentClient } from "@/lib/session";
 
 const Body = z.object({ decision: z.enum(["approve", "revise"]) });
 
@@ -9,12 +9,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const contact = await getCurrentContact();
-  if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+  const client = await getCurrentClient();
+  if (!client) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
   const photo = await getPhotoWithEventClientId(id);
-  if (!photo || photo.kind !== "video" || photo.event.clientId !== contact.clientId) {
+  if (!photo || photo.kind !== "video" || photo.event.clientId !== client.clientId) {
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
   }
 
@@ -23,7 +23,7 @@ export async function POST(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const updated = await decideVideoReview(id, contact.contactId, parsed.data.decision);
+  const updated = await decideVideoReview(id, parsed.data.decision);
   if (!updated) {
     return NextResponse.json({ error: "This video has already been decided." }, { status: 409 });
   }
@@ -32,7 +32,6 @@ export async function POST(
     review: {
       status: updated.status,
       decidedAt: updated.decidedAt,
-      decidedByName: formatAuthorName(contact.contactId, contact.name, contact.contactId),
     },
   });
 }

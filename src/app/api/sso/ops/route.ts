@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentContact } from "@/lib/session";
+import { getCurrentClient } from "@/lib/session";
 import { getClientById } from "@/lib/queries";
 import { createOpsHandoffToken } from "@/lib/opsSso";
 
@@ -16,12 +16,12 @@ const OPS_PORTAL_ORIGIN = "https://fotofoto-ops.vercel.app";
  * hit directly or from stale cached HTML.
  */
 export async function GET(req: NextRequest) {
-  const contact = await getCurrentContact();
-  if (!contact) {
+  const session = await getCurrentClient();
+  if (!session) {
     return NextResponse.redirect(new URL("/login", req.nextUrl.origin));
   }
 
-  const client = await getClientById(contact.clientId);
+  const client = await getClientById(session.clientId);
   const entitled = client != null && client.relationshipStage !== "foundation";
   if (!entitled || !client.opsClientId) {
     // Nothing to hand off to — same "not yet connected" situation the
@@ -29,6 +29,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/library", req.nextUrl.origin));
   }
 
-  const token = createOpsHandoffToken(client.opsClientId, contact.name);
+  const token = createOpsHandoffToken(client.opsClientId, client.companyName);
   return NextResponse.redirect(`${OPS_PORTAL_ORIGIN}/portal/sso?token=${token}`);
 }

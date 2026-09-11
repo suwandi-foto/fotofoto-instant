@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getContactByAccessCode } from "@/lib/queries";
+import { getClientByAccessCode } from "@/lib/queries";
 import { createSession } from "@/lib/session";
 
 const Body = z.object({ accessCode: z.string().min(1) });
 
 /**
- * Single-step client-contact login: the access code is a standing
- * credential FOTOFOTO staff hand to the contact directly (see POST
- * /api/admin/clients), not a single-use token — a contact can log in
- * with it repeatedly, from any device, until staff issues a new one.
+ * Single-step client login: the access code is a standing credential
+ * — one shared code per client company, chosen by staff in fotofoto-ops
+ * and provisioned here via POST /api/ops/clients (or set directly via
+ * /admin/clients) — not a single-use token. Anyone at that client can
+ * log in with it repeatedly, from any device, until staff rotates it.
  *
  * The rejection message is deliberately the same generic "not valid"
  * whether the code is unknown or just malformed, so guessing gets no
@@ -21,11 +22,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "That code isn't valid." }, { status: 400 });
   }
 
-  const contact = await getContactByAccessCode(parsed.data.accessCode);
-  if (!contact) {
+  const client = await getClientByAccessCode(parsed.data.accessCode);
+  if (!client) {
     return NextResponse.json({ error: "That code isn't valid." }, { status: 401 });
   }
 
-  await createSession(contact.id, contact.clientId);
+  await createSession(client.id);
   return NextResponse.json({ ok: true });
 }

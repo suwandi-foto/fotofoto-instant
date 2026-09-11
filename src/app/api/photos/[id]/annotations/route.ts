@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getPhotoWithEventClientId, listPhotoAnnotations, createPhotoAnnotation } from "@/lib/queries";
-import { getCurrentContact, formatAuthorName } from "@/lib/session";
+import { getCurrentClient } from "@/lib/session";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const contact = await getCurrentContact();
-  if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+  const client = await getCurrentClient();
+  if (!client) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
   const photo = await getPhotoWithEventClientId(id);
   // 404, not 403 — same "don't reveal it exists" shape as a wrong slug,
   // for a photo belonging to someone else's event.
-  if (!photo || photo.event.clientId !== contact.clientId) {
+  if (!photo || photo.event.clientId !== client.clientId) {
     return NextResponse.json({ error: "Photo not found" }, { status: 404 });
   }
 
@@ -25,7 +25,6 @@ export async function GET(
     xPct: row.xPct,
     yPct: row.yPct,
     note: row.note,
-    author: formatAuthorName(row.contactId, row.contact.name, contact.contactId),
     createdAt: row.createdAt,
   }));
 
@@ -42,12 +41,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const contact = await getCurrentContact();
-  if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+  const client = await getCurrentClient();
+  if (!client) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
   const photo = await getPhotoWithEventClientId(id);
-  if (!photo || photo.event.clientId !== contact.clientId) {
+  if (!photo || photo.event.clientId !== client.clientId) {
     return NextResponse.json({ error: "Photo not found" }, { status: 404 });
   }
 
@@ -58,7 +57,7 @@ export async function POST(
 
   await createPhotoAnnotation({
     photoId: id,
-    contactId: contact.contactId,
+    clientId: client.clientId,
     xPct: parsed.data.xPct,
     yPct: parsed.data.yPct,
     note: parsed.data.note,

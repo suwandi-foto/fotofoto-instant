@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 
-type Note = { id: string; timestampSeconds: number; note: string; author: string };
+type Note = { id: string; timestampSeconds: number; note: string };
 type Status = "awaiting_notes" | "revision_requested" | "approved";
 
 function formatTime(totalSeconds: number) {
@@ -26,7 +26,7 @@ export function VideoReviewView({
   previewUrl,
   initialNotes,
   initialStatus,
-  initialDecidedByName,
+  initialDecidedAt,
 }: {
   eventSlug: string;
   eventName: string;
@@ -34,7 +34,7 @@ export function VideoReviewView({
   previewUrl: string;
   initialNotes: Note[];
   initialStatus: Status;
-  initialDecidedByName: string | null;
+  initialDecidedAt: string | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -46,7 +46,7 @@ export function VideoReviewView({
   const [addingNote, setAddingNote] = useState(false);
 
   const [status, setStatus] = useState<Status>(initialStatus);
-  const [decidedByName, setDecidedByName] = useState(initialDecidedByName);
+  const [decidedAt, setDecidedAt] = useState(initialDecidedAt);
   const [deciding, setDeciding] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +109,7 @@ export function VideoReviewView({
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not record decision");
       const data = await res.json();
       setStatus(data.review.status);
-      setDecidedByName(data.review.decidedByName);
+      setDecidedAt(data.review.decidedAt);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -227,8 +227,7 @@ export function VideoReviewView({
                 {formatTime(n.timestampSeconds)}
               </div>
               <div>
-                <div className="text-xs font-bold">{n.author}</div>
-                <div className="mt-0.5 text-xs leading-relaxed text-text-dim">{n.note}</div>
+                <div className="text-xs leading-relaxed text-text-dim">{n.note}</div>
               </div>
             </button>
           ))
@@ -248,8 +247,8 @@ export function VideoReviewView({
             }`}
           >
             {status === "approved"
-              ? `Approved${decidedByName ? ` by ${decidedByName}` : ""} — full-resolution video will be delivered shortly.`
-              : `Sent back for revision${decidedByName ? ` by ${decidedByName}` : ""} — Creatives will address these notes.`}
+              ? `Approved${decidedAt ? ` on ${new Date(decidedAt).toLocaleDateString()}` : ""} — full-resolution video will be delivered shortly.`
+              : `Sent back for revision${decidedAt ? ` on ${new Date(decidedAt).toLocaleDateString()}` : ""} — Creatives will address these notes.`}
           </div>
         ) : (
           <div className="flex gap-2.5">

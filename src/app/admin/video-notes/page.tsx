@@ -65,7 +65,7 @@ export default async function AdminVideoNotesPage() {
                     <div key={n.id} className="flex items-start justify-between gap-3 rounded-lg bg-panel-2 p-2.5">
                       <div className="min-w-0">
                         <div className="text-[11px] font-extrabold text-gold">
-                          {formatTime(n.timestampSeconds)} · {n.contact.name}
+                          {formatTime(n.timestampSeconds)}
                         </div>
                         <div className="mt-0.5 text-xs text-text-dim">{n.note}</div>
                       </div>

@@ -2,16 +2,16 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { generateAccessCode } from "@/lib/ids";
 
 type RelationshipStage = "foundation" | "growth_partner" | "enterprise";
 
-type CreatedContact = {
-  name: string;
-  accessCode: string;
+type CreatedClient = {
   companyName: string;
+  accessCode: string;
 };
 
-export function NewClientContactForm({
+export function ClientAccessCodeForm({
   clients,
 }: {
   clients: { id: string; companyName: string }[];
@@ -21,12 +21,10 @@ export function NewClientContactForm({
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
   const [companyName, setCompanyName] = useState("");
   const [relationshipStage, setRelationshipStage] = useState<RelationshipStage>("foundation");
-  const [name, setName] = useState("");
-  const [department, setDepartment] = useState("");
-  const [email, setEmail] = useState("");
+  const [accessCode, setAccessCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<CreatedContact | null>(null);
+  const [created, setCreated] = useState<CreatedClient | null>(null);
   const [copied, setCopied] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
@@ -44,18 +42,14 @@ export function NewClientContactForm({
         body: JSON.stringify({
           ...(clientMode === "existing" ? { clientId } : { companyName }),
           relationshipStage,
-          name,
-          department,
-          email,
+          accessCode,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not create contact");
+      if (!res.ok) throw new Error(data.error ?? "Could not save access code");
 
-      setCreated({ name: data.contact.name, accessCode: data.contact.accessCode, companyName: selectedCompanyName });
-      setName("");
-      setDepartment("");
-      setEmail("");
+      setCreated({ companyName: data.client.companyName ?? selectedCompanyName, accessCode: data.client.accessCode });
+      setAccessCode("");
       router.refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -79,9 +73,7 @@ export function NewClientContactForm({
     <div className="flex flex-col gap-5">
       {created && (
         <div className="rounded-2xl border border-gold/40 bg-gold/10 p-4">
-          <p className="text-sm text-text-dim">
-            {created.name} at {created.companyName} — access code:
-          </p>
+          <p className="text-sm text-text-dim">{created.companyName} — access code:</p>
           <div className="mt-2 flex items-center gap-3">
             <span className="font-display text-2xl font-bold tracking-[0.2em] text-gold">
               {created.accessCode}
@@ -95,7 +87,7 @@ export function NewClientContactForm({
             </button>
           </div>
           <p className="mt-2 text-xs text-text-dim-2">
-            Send this to the client — it works repeatedly until you create them a new one.
+            Send this to the client — it works repeatedly until you set them a new one.
           </p>
         </div>
       )}
@@ -160,39 +152,24 @@ export function NewClientContactForm({
           </select>
         </label>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm text-text-dim">
-            Contact name
-            <input
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Sarah Wijaya"
-              className="rounded-lg border border-border bg-panel-2 px-3 py-2 text-text outline-none focus:border-gold"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm text-text-dim">
-            Department
-            <input
-              required
-              value={department}
-              onChange={(e) => setDepartment(e.target.value)}
-              placeholder="Marketing"
-              className="rounded-lg border border-border bg-panel-2 px-3 py-2 text-text outline-none focus:border-gold"
-            />
-          </label>
-        </div>
-
         <label className="flex flex-col gap-1 text-sm text-text-dim">
-          Email (for records — not used for login)
-          <input
-            required
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="sarah@client.com"
-            className="rounded-lg border border-border bg-panel-2 px-3 py-2 text-text outline-none focus:border-gold"
-          />
+          Access code
+          <div className="flex gap-2">
+            <input
+              required
+              value={accessCode}
+              onChange={(e) => setAccessCode(e.target.value)}
+              placeholder="Type a password, or generate one"
+              className="flex-grow rounded-lg border border-border bg-panel-2 px-3 py-2 text-text outline-none focus:border-gold"
+            />
+            <button
+              type="button"
+              onClick={() => setAccessCode(generateAccessCode())}
+              className="flex-shrink-0 rounded-lg border border-border bg-panel-2 px-3 py-2 text-xs font-bold text-text hover:border-gold"
+            >
+              Generate
+            </button>
+          </div>
         </label>
 
         {error && <p className="text-sm text-red-400">{error}</p>}
@@ -202,7 +179,7 @@ export function NewClientContactForm({
           disabled={busy || (clientMode === "existing" && !clientId)}
           className="w-fit rounded-sm bg-gold px-4 py-2 font-semibold text-gold-ink hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? "Creating…" : "Create contact + code"}
+          {busy ? "Saving…" : "Save access code"}
         </button>
       </form>
     </div>

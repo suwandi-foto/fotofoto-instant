@@ -35,6 +35,12 @@ function sign(payload: string) {
 
 type OpsHandoffPayload = {
   opsClientId: string;
+  // Wire field name kept as `contactName` for now even though this
+  // repo dropped per-person contacts: it now carries the client's
+  // companyName instead. Renaming the key would need a simultaneous
+  // deploy on fotofoto-ops's side (the verifier there reads this
+  // field), so that rename is deferred to a coordinated change across
+  // both repos rather than bundled into this one.
   contactName: string;
   iat: number; // unix seconds
   exp: number; // iat + SSO_TOKEN_TTL_SECONDS
@@ -47,11 +53,11 @@ type OpsHandoffPayload = {
  * clicks. No replay protection beyond that short expiry (no nonce
  * store) — an accepted tradeoff for this pass, not an oversight.
  */
-export function createOpsHandoffToken(opsClientId: string, contactName: string): string {
+export function createOpsHandoffToken(opsClientId: string, companyName: string): string {
   const iat = Math.floor(Date.now() / 1000);
   const payload: OpsHandoffPayload = {
     opsClientId,
-    contactName,
+    contactName: companyName,
     iat,
     exp: iat + SSO_TOKEN_TTL_SECONDS,
   };

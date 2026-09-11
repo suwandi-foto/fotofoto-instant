@@ -5,7 +5,6 @@ import { db } from "@/db/client";
 import { events, photos } from "@/db/schema";
 import {
   createClient,
-  createClientContact,
   createEvent,
   createQueuedPhoto,
   markPhotoLive,
@@ -22,20 +21,20 @@ import { processCapturedPhoto } from "@/lib/image";
 import { generateId } from "@/lib/ids";
 
 /**
- * DEV-ONLY: populates a realistic demo dataset (client, contacts,
- * two events with live photos/a video, annotations, reactions,
- * feedback + referral) in one call, so the app can be clicked through
- * locally without a real event ever having happened. Placeholder
- * photos are generated in-process (solid-color SVG -> sharp) and run
- * through the real processCapturedPhoto pipeline, so previews/originals
- * behave exactly like a real upload's. Blocked outside dev for the
- * same reason as /api/dev/contacts.
+ * DEV-ONLY: populates a realistic demo dataset (one client, two events
+ * with live photos/a video, annotations, reactions, feedback +
+ * referral) in one call, so the app can be clicked through locally
+ * without a real event ever having happened. Placeholder photos are
+ * generated in-process (solid-color SVG -> sharp) and run through the
+ * real processCapturedPhoto pipeline, so previews/originals behave
+ * exactly like a real upload's. Blocked outside dev for the same
+ * reason as /api/dev/clients.
  *
- * Not idempotent — contact emails are fixed, so a second call fails
- * on the clientContacts.email unique constraint. Reset by deleting the
- * seeded client row (cascades to contacts/events/photos/etc.) before
- * re-running.
+ * Not idempotent — the access code is fixed, so a second call fails on
+ * the clients.access_code unique constraint. Reset by deleting the
+ * seeded client row (cascades to events/photos/etc.) before re-running.
  */
+const SEED_ACCESS_CODE = "DEMO123";
 const PALETTE = [
   { r: 214, g: 138, b: 60 }, // gold
   { r: 79, g: 109, b: 122 },
@@ -101,20 +100,8 @@ export async function POST(req: Request) {
 
   const client = await createClient({
     companyName: "PT Nusantara Digital",
+    accessCode: SEED_ACCESS_CODE,
     opsClientId: "demo-crm-001",
-  });
-
-  const sarah = await createClientContact({
-    clientId: client!.id,
-    name: "Sarah Wijaya",
-    department: "Marketing",
-    email: "sarah.wijaya@nusantara.example",
-  });
-  const budi = await createClientContact({
-    clientId: client!.id,
-    name: "Budi Santoso",
-    department: "Ops",
-    email: "budi.santoso@nusantara.example",
   });
 
   // Event A — full access, already "delivered": live photos, a video
@@ -133,21 +120,20 @@ export async function POST(req: Request) {
 
   await createPhotoAnnotation({
     photoId: eventAPhotoIds[0],
-    contactId: sarah!.id,
+    clientId: client!.id,
     xPct: 32,
     yPct: 58,
     note: "Love this candid moment — can we get it on the highlight reel?",
   });
   await createPhotoAnnotation({
     photoId: eventAPhotoIds[0],
-    contactId: budi!.id,
+    clientId: client!.id,
     xPct: 70,
     yPct: 22,
     note: "Can we get this cropped a bit tighter on the left?",
   });
-  await togglePhotoReaction(eventAPhotoIds[1], sarah!.id);
-  await togglePhotoReaction(eventAPhotoIds[2], sarah!.id);
-  await togglePhotoReaction(eventAPhotoIds[2], budi!.id);
+  await togglePhotoReaction(eventAPhotoIds[1], client!.id);
+  await togglePhotoReaction(eventAPhotoIds[2], client!.id);
 
   // A draft video, still awaiting the real transcoding pipeline (see
   // README) — no preview bytes, same as production would have it.
@@ -162,17 +148,17 @@ export async function POST(req: Request) {
   });
   await createVideoNote({
     photoId: videoId,
-    contactId: sarah!.id,
+    clientId: client!.id,
     timestampSeconds: 4.2,
     note: "Love the drone shot here!",
   });
   await createVideoNote({
     photoId: videoId,
-    contactId: budi!.id,
+    clientId: client!.id,
     timestampSeconds: 18.5,
     note: "Can we trim the intro by a couple seconds?",
   });
-  await decideVideoReview(videoId, budi!.id, "revise");
+  await decideVideoReview(videoId, "revise");
 
   const feedbackRow = await createFeedback({
     eventId: eventA!.id,
@@ -210,11 +196,12 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     ok: true,
-    client: { id: client!.id, companyName: client!.companyName, opsClientId: client!.opsClientId },
-    contacts: [
-      { name: sarah!.name, email: sarah!.email, accessCode: sarah!.accessCode },
-      { name: budi!.name, email: budi!.email, accessCode: budi!.accessCode },
-    ],
+    client: {
+      id: client!.id,
+      companyName: client!.companyName,
+      opsClientId: client!.opsClientId,
+      accessCode: client!.accessCode,
+    },
     events: [
       { name: eventA!.name, slug: eventA!.slug, tier: eventA!.tier, galleryUrl: `${origin}/e/${eventA!.slug}`, videoReviewUrl: `${origin}/e/${eventA!.slug}/video/${videoId}` },
       { name: eventB!.name, slug: eventB!.slug, tier: eventB!.tier, galleryUrl: `${origin}/e/${eventB!.slug}` },

@@ -154,12 +154,15 @@ export const selectionItems = pgTable("selection_items", {
 });
 
 /**
- * Minimal client record for gating login and grouping events/contacts
- * in *this* app. Deliberately NOT a mirror of the CRM's Client entity
- * in the separate fotofoto-ops codebase (company/deal/relationship
- * data lives there) — `opsClientId` is just a loose, nullable
- * cross-reference for later, so this table doesn't grow into a second
- * database that needs reconciling with that one.
+ * Client record — also the login boundary: one shared, staff-chosen
+ * `accessCode` per client company (not per named person). The code is
+ * typed by staff directly into fotofoto-ops when a lead becomes a
+ * client, then pushed here via POST /api/ops/clients (see that route
+ * and upsertClientFromOps in queries.ts) — this app never generates
+ * one itself. `opsClientId` is a real, unique idempotency key for that
+ * inbound call, not just a loose reference: it's how repeat/retried
+ * calls for the same fotofoto-ops client resolve to the same row here
+ * instead of creating a duplicate.
  */
 export const relationshipStageEnum = ["foundation", "growth_partner", "enterprise"] as const;
 export type RelationshipStage = (typeof relationshipStageEnum)[number];
@@ -167,42 +170,17 @@ export type RelationshipStage = (typeof relationshipStageEnum)[number];
 export const clients = pgTable("clients", {
   id: text("id").primaryKey(),
   companyName: text("company_name").notNull(),
-  opsClientId: text("ops_client_id"), // nullable future cross-reference to fotofoto-ops
+  opsClientId: text("ops_client_id").unique(), // idempotency key for POST /api/ops/clients
+  accessCode: text("access_code").notNull().unique(),
   // Gates the Communication Health card (see EntryCards.tsx) — that
   // page lives entirely in fotofoto-ops (real MCMM/ACTR data already
   // exists there; see that repo's mcmm_sessions/communication_health_data),
   // so this only controls whether this app treats the client as
   // entitled to it, not any data about the score itself. Staff-set only
-  // (see POST /api/dev/contacts) — no client-facing editor, by design.
+  // — no client-facing editor, by design.
   relationshipStage: text("relationship_stage", { enum: relationshipStageEnum })
     .notNull()
     .default("foundation"),
-  createdAt: text("created_at")
-    .notNull()
-    .$defaultFn(isoNow),
-});
-
-/**
- * A named individual at a client who can log in (Photo Detail pin
- * annotations, Video Review notes need to show *who* left a note).
- * `department` is free text, not an enum — whatever the client calls
- * their own team ("Marketing," "Sales," "Ops," ...).
- *
- * `accessCode` is a standing, staff-issued login credential (not a
- * single-use token) — generated once when the contact is created (see
- * createClientContact) and handed to the client directly, e.g. over
- * WhatsApp. It's deliberately per-contact rather than per-client so
- * pin annotations and video notes keep attributing to a named person.
- */
-export const clientContacts = pgTable("client_contacts", {
-  id: text("id").primaryKey(),
-  clientId: text("client_id")
-    .notNull()
-    .references(() => clients.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  department: text("department").notNull(),
-  email: text("email").notNull().unique(),
-  accessCode: text("access_code").notNull().unique(),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(isoNow),
@@ -219,9 +197,9 @@ export const photoAnnotations = pgTable("photo_annotations", {
   photoId: text("photo_id")
     .notNull()
     .references(() => photos.id, { onDelete: "cascade" }),
-  contactId: text("contact_id")
+  clientId: text("client_id")
     .notNull()
-    .references(() => clientContacts.id, { onDelete: "cascade" }),
+    .references(() => clients.id, { onDelete: "cascade" }),
   xPct: doublePrecision("x_pct").notNull(),
   yPct: doublePrecision("y_pct").notNull(),
   note: text("note").notNull(),
@@ -231,9 +209,11 @@ export const photoAnnotations = pgTable("photo_annotations", {
 });
 
 /**
- * A contact's heart reaction on a photo. One row per (photo, contact)
- * — toggling removes the row rather than ever inserting a second one,
- * enforced at the DB level so a race can't produce a duplicate.
+ * A client's heart reaction on a photo. One row per (photo, client) —
+ * since login is shared per-company rather than per-person, this is a
+ * company-wide like, not a per-person one. Toggling removes the row
+ * rather than ever inserting a second one, enforced at the DB level so
+ * a race can't produce a duplicate.
  */
 export const photoReactions = pgTable(
   "photo_reactions",
@@ -242,29 +222,29 @@ export const photoReactions = pgTable(
     photoId: text("photo_id")
       .notNull()
       .references(() => photos.id, { onDelete: "cascade" }),
-    contactId: text("contact_id")
+    clientId: text("client_id")
       .notNull()
-      .references(() => clientContacts.id, { onDelete: "cascade" }),
+      .references(() => clients.id, { onDelete: "cascade" }),
     createdAt: text("created_at")
       .notNull()
       .$defaultFn(isoNow),
   },
-  (table) => [uniqueIndex("photo_reactions_photo_contact_unique").on(table.photoId, table.contactId)]
+  (table) => [uniqueIndex("photo_reactions_photo_client_unique").on(table.photoId, table.clientId)]
 );
 
 export const photoAnnotationsRelations = relations(photoAnnotations, ({ one }) => ({
   photo: one(photos, { fields: [photoAnnotations.photoId], references: [photos.id] }),
-  contact: one(clientContacts, {
-    fields: [photoAnnotations.contactId],
-    references: [clientContacts.id],
+  client: one(clients, {
+    fields: [photoAnnotations.clientId],
+    references: [clients.id],
   }),
 }));
 
 export const photoReactionsRelations = relations(photoReactions, ({ one }) => ({
   photo: one(photos, { fields: [photoReactions.photoId], references: [photos.id] }),
-  contact: one(clientContacts, {
-    fields: [photoReactions.contactId],
-    references: [clientContacts.id],
+  client: one(clients, {
+    fields: [photoReactions.clientId],
+    references: [clients.id],
   }),
 }));
 
@@ -278,9 +258,9 @@ export const videoNotes = pgTable("video_notes", {
   photoId: text("photo_id")
     .notNull()
     .references(() => photos.id, { onDelete: "cascade" }),
-  contactId: text("contact_id")
+  clientId: text("client_id")
     .notNull()
-    .references(() => clientContacts.id, { onDelete: "cascade" }),
+    .references(() => clients.id, { onDelete: "cascade" }),
   timestampSeconds: doublePrecision("timestamp_seconds").notNull(),
   note: text("note").notNull(),
   // Set by staff from the admin video-notes view once they've acted on
@@ -312,29 +292,19 @@ export const videoReviews = pgTable("video_reviews", {
     .references(() => photos.id, { onDelete: "cascade" }),
   status: text("status", { enum: videoReviewStatusEnum }).notNull().default("awaiting_notes"),
   decidedAt: text("decided_at"),
-  decidedByContactId: text("decided_by_contact_id").references(() => clientContacts.id),
 });
 
 export const videoNotesRelations = relations(videoNotes, ({ one }) => ({
   photo: one(photos, { fields: [videoNotes.photoId], references: [photos.id] }),
-  contact: one(clientContacts, { fields: [videoNotes.contactId], references: [clientContacts.id] }),
+  client: one(clients, { fields: [videoNotes.clientId], references: [clients.id] }),
 }));
 
 export const videoReviewsRelations = relations(videoReviews, ({ one }) => ({
   photo: one(photos, { fields: [videoReviews.photoId], references: [photos.id] }),
-  decidedBy: one(clientContacts, {
-    fields: [videoReviews.decidedByContactId],
-    references: [clientContacts.id],
-  }),
 }));
 
 export const clientsRelations = relations(clients, ({ many }) => ({
-  contacts: many(clientContacts),
   events: many(events),
-}));
-
-export const clientContactsRelations = relations(clientContacts, ({ one }) => ({
-  client: one(clients, { fields: [clientContacts.clientId], references: [clients.id] }),
 }));
 
 export const customPresetsRelations = relations(customPresets, ({ one }) => ({

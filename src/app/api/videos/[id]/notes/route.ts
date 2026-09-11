@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getPhotoWithEventClientId, listVideoNotes, createVideoNote } from "@/lib/queries";
-import { getCurrentContact, formatAuthorName } from "@/lib/session";
-import type { CurrentContact } from "@/lib/session";
+import { getCurrentClient } from "@/lib/session";
+import type { CurrentClient } from "@/lib/session";
 
-async function getOwnedVideoOr404(id: string, contact: CurrentContact) {
+async function getOwnedVideoOr404(id: string, client: CurrentClient) {
   const photo = await getPhotoWithEventClientId(id);
-  if (!photo || photo.kind !== "video" || photo.event.clientId !== contact.clientId) return null;
+  if (!photo || photo.kind !== "video" || photo.event.clientId !== client.clientId) return null;
   return photo;
 }
 
@@ -14,11 +14,11 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const contact = await getCurrentContact();
-  if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+  const client = await getCurrentClient();
+  if (!client) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
-  const video = await getOwnedVideoOr404(id, contact);
+  const video = await getOwnedVideoOr404(id, client);
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   const rows = await listVideoNotes(id);
@@ -26,7 +26,6 @@ export async function GET(
     id: row.id,
     timestampSeconds: row.timestampSeconds,
     note: row.note,
-    author: formatAuthorName(row.contactId, row.contact.name, contact.contactId),
     createdAt: row.createdAt,
   }));
 
@@ -42,11 +41,11 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const contact = await getCurrentContact();
-  if (!contact) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+  const client = await getCurrentClient();
+  if (!client) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
 
   const { id } = await params;
-  const video = await getOwnedVideoOr404(id, contact);
+  const video = await getOwnedVideoOr404(id, client);
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   const parsed = Body.safeParse(await req.json().catch(() => null));
@@ -56,7 +55,7 @@ export async function POST(
 
   await createVideoNote({
     photoId: id,
-    contactId: contact.contactId,
+    clientId: client.clientId,
     timestampSeconds: parsed.data.timestampSeconds,
     note: parsed.data.note,
   });

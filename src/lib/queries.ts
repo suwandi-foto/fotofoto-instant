@@ -9,7 +9,6 @@ import {
   feedback,
   referrals,
   clients,
-  clientContacts,
   photoAnnotations,
   photoReactions,
   videoNotes,
@@ -24,7 +23,7 @@ import {
   type RelationshipStage,
 } from "@/db/schema";
 import { eq, and, asc, desc, isNull } from "drizzle-orm";
-import { generateId, generateSlug, generateVoucherCode, generateAccessCode } from "./ids";
+import { generateId, generateSlug, generateVoucherCode } from "./ids";
 import type { ColorStats } from "./image";
 
 export async function createEvent(input: {
@@ -353,10 +352,13 @@ export async function getClientById(id: string) {
   return row ?? null;
 }
 
-/** Staff-facing creation path — see POST /api/admin/clients (and the
- * dev-only POST /api/dev/contacts, which calls the same function). */
+/** Staff-facing creation path — see POST /api/admin/clients. The
+ * access code is always supplied by the caller (staff, typed directly
+ * or via fotofoto-ops) rather than generated in here — see
+ * upsertClientFromOps below for the fotofoto-ops-driven path. */
 export async function createClient(input: {
   companyName: string;
+  accessCode: string;
   opsClientId?: string | null;
   relationshipStage?: RelationshipStage;
 }) {
@@ -364,6 +366,7 @@ export async function createClient(input: {
   await db.insert(clients).values({
     id,
     companyName: input.companyName,
+    accessCode: input.accessCode,
     opsClientId: input.opsClientId ?? null,
     relationshipStage: input.relationshipStage ?? "foundation",
   });
@@ -378,51 +381,83 @@ export async function setClientRelationshipStage(clientId: string, stage: Relati
   await db.update(clients).set({ relationshipStage: stage }).where(eq(clients.id, clientId));
 }
 
-export async function getContactById(id: string) {
-  const row = await db.query.clientContacts.findFirst({ where: eq(clientContacts.id, id) });
-  return row ?? null;
+export async function setClientAccessCode(clientId: string, accessCode: string) {
+  await db.update(clients).set({ accessCode }).where(eq(clients.id, clientId));
 }
 
-export async function getContactByAccessCode(accessCode: string) {
-  const row = await db.query.clientContacts.findFirst({
-    where: eq(clientContacts.accessCode, accessCode.trim().toUpperCase()),
+/** Case-sensitive, trim-only lookup. Unlike the old per-contact codes
+ * (auto-generated for reading aloud over WhatsApp, hence
+ * case-insensitive), this is a password a human deliberately types
+ * once into fotofoto-ops — an ordinary case-sensitive credential. */
+export async function getClientByAccessCode(accessCode: string) {
+  const row = await db.query.clients.findFirst({
+    where: eq(clients.accessCode, accessCode.trim()),
   });
   return row ?? null;
 }
 
-/** Generates a unique access code server-side and retries on the rare
- * collision, same pattern as createReferral's voucher code. A
- * collision on the contact's email unique constraint is a real error
- * (a genuine duplicate contact), not a code clash, so that's rethrown
- * immediately rather than retried. */
-export async function createClientContact(input: {
-  clientId: string;
-  name: string;
-  department: string;
-  email: string;
-}) {
-  const maxAttempts = 5;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const id = generateId();
-    const accessCode = generateAccessCode();
+export async function getClientByOpsClientId(opsClientId: string) {
+  const row = await db.query.clients.findFirst({ where: eq(clients.opsClientId, opsClientId) });
+  return row ?? null;
+}
+
+export class AccessCodeConflictError extends Error {}
+
+/**
+ * The fotofoto-ops-driven provisioning path — see POST
+ * /api/ops/clients. `opsClientId` is the idempotency key: a repeat
+ * call for the same fotofoto-ops client updates the existing row
+ * (companyName/accessCode unconditionally; relationshipStage only if
+ * given, so ops omitting it doesn't reset a staff-tuned value back to
+ * "foundation") rather than creating a duplicate. Retries as an update
+ * if a race loses the opsClientId uniqueness check; surfaces a
+ * same-code-different-client collision as AccessCodeConflictError
+ * rather than silently reassigning someone else's password.
+ */
+export async function upsertClientFromOps(input: {
+  opsClientId: string;
+  companyName: string;
+  accessCode: string;
+  relationshipStage?: RelationshipStage;
+}): Promise<{ created: boolean; client: NonNullable<Awaited<ReturnType<typeof getClientById>>> }> {
+  const existing = await getClientByOpsClientId(input.opsClientId);
+
+  if (existing) {
     try {
-      await db.insert(clientContacts).values({
-        id,
-        clientId: input.clientId,
-        name: input.name,
-        department: input.department,
-        email: input.email.toLowerCase(),
-        accessCode,
-      });
-      return getContactById(id);
+      await db
+        .update(clients)
+        .set({
+          companyName: input.companyName,
+          accessCode: input.accessCode,
+          ...(input.relationshipStage ? { relationshipStage: input.relationshipStage } : {}),
+        })
+        .where(eq(clients.id, existing.id));
     } catch (err) {
-      const code = (err as { code?: string; constraint?: string }).code;
-      const constraint = (err as { constraint?: string }).constraint;
-      const isAccessCodeClash = code === "23505" && constraint === "client_contacts_access_code_unique";
-      if (!isAccessCodeClash || attempt === maxAttempts) throw err;
+      const constraint = (err as { code?: string; constraint?: string }).constraint;
+      if (constraint === "clients_access_code_unique") throw new AccessCodeConflictError();
+      throw err;
     }
+    return { created: false, client: (await getClientById(existing.id))! };
   }
-  throw new Error("Could not generate a unique access code.");
+
+  try {
+    const client = await createClient({
+      companyName: input.companyName,
+      accessCode: input.accessCode,
+      opsClientId: input.opsClientId,
+      relationshipStage: input.relationshipStage,
+    });
+    return { created: true, client: client! };
+  } catch (err) {
+    const constraint = (err as { code?: string; constraint?: string }).constraint;
+    if (constraint === "clients_ops_client_id_unique") {
+      // Race: another request inserted this opsClientId between our
+      // lookup and our insert — retry as an update.
+      return upsertClientFromOps(input);
+    }
+    if (constraint === "clients_access_code_unique") throw new AccessCodeConflictError();
+    throw err;
+  }
 }
 
 export async function listClientEvents(clientId: string) {
@@ -450,13 +485,12 @@ export async function listPhotoAnnotations(photoId: string) {
   return db.query.photoAnnotations.findMany({
     where: eq(photoAnnotations.photoId, photoId),
     orderBy: asc(photoAnnotations.createdAt),
-    with: { contact: true },
   });
 }
 
 export async function createPhotoAnnotation(input: {
   photoId: string;
-  contactId: string;
+  clientId: string;
   xPct: number;
   yPct: number;
   note: string;
@@ -465,7 +499,7 @@ export async function createPhotoAnnotation(input: {
   await db.insert(photoAnnotations).values({
     id,
     photoId: input.photoId,
-    contactId: input.contactId,
+    clientId: input.clientId,
     xPct: input.xPct,
     yPct: input.yPct,
     note: input.note,
@@ -473,42 +507,41 @@ export async function createPhotoAnnotation(input: {
   return id;
 }
 
-export async function getPhotoReactionSummary(photoId: string, contactId: string | null) {
-  // Reactions per photo are bounded by how many contacts a client has
-  // (a handful, not a viral audience), so loading every row to count
-  // and check membership is simpler than a separate aggregate query
-  // and plenty fast at this scale.
+export async function getPhotoReactionSummary(photoId: string, clientId: string | null) {
+  // Reactions per photo are bounded by realistic traffic at this
+  // scale, so loading every row to count and check membership is
+  // simpler than a separate aggregate query and plenty fast.
   const rows = await db.query.photoReactions.findMany({
     where: eq(photoReactions.photoId, photoId),
   });
   return {
     count: rows.length,
-    liked: contactId != null && rows.some((r) => r.contactId === contactId),
+    liked: clientId != null && rows.some((r) => r.clientId === clientId),
   };
 }
 
 /** Toggle is a plain check-then-act, made safe against a double-tap
- * race by the table's (photo_id, contact_id) unique index: if two
+ * race by the table's (photo_id, client_id) unique index: if two
  * requests both see "not yet liked" and both try to insert, the
  * second's insert hits 23505 and is treated as "already liked" rather
  * than surfaced as an error. */
-export async function togglePhotoReaction(photoId: string, contactId: string) {
+export async function togglePhotoReaction(photoId: string, clientId: string) {
   const existing = await db.query.photoReactions.findFirst({
-    where: and(eq(photoReactions.photoId, photoId), eq(photoReactions.contactId, contactId)),
+    where: and(eq(photoReactions.photoId, photoId), eq(photoReactions.clientId, clientId)),
   });
 
   if (existing) {
     await db.delete(photoReactions).where(eq(photoReactions.id, existing.id));
   } else {
     try {
-      await db.insert(photoReactions).values({ id: generateId(), photoId, contactId });
+      await db.insert(photoReactions).values({ id: generateId(), photoId, clientId });
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code !== "23505") throw err;
     }
   }
 
-  return getPhotoReactionSummary(photoId, contactId);
+  return getPhotoReactionSummary(photoId, clientId);
 }
 
 /** Chronological by in-video timestamp (not createdAt) so notes line
@@ -517,13 +550,12 @@ export async function listVideoNotes(photoId: string) {
   return db.query.videoNotes.findMany({
     where: eq(videoNotes.photoId, photoId),
     orderBy: asc(videoNotes.timestampSeconds),
-    with: { contact: true },
   });
 }
 
 export async function createVideoNote(input: {
   photoId: string;
-  contactId: string;
+  clientId: string;
   timestampSeconds: number;
   note: string;
 }) {
@@ -531,7 +563,7 @@ export async function createVideoNote(input: {
   await db.insert(videoNotes).values({
     id,
     photoId: input.photoId,
-    contactId: input.contactId,
+    clientId: input.clientId,
     timestampSeconds: input.timestampSeconds,
     note: input.note,
   });
@@ -544,7 +576,6 @@ export async function createVideoNote(input: {
 export async function getOrCreateVideoReview(photoId: string) {
   const existing = await db.query.videoReviews.findFirst({
     where: eq(videoReviews.photoId, photoId),
-    with: { decidedBy: true },
   });
   if (existing) return existing;
 
@@ -553,31 +584,29 @@ export async function getOrCreateVideoReview(photoId: string) {
   });
   return (await db.query.videoReviews.findFirst({
     where: eq(videoReviews.photoId, photoId),
-    with: { decidedBy: true },
   }))!;
 }
 
 /**
  * Records the client's decision, but only once: the UPDATE is
  * conditioned on the row still being `awaiting_notes`, so a race
- * between two contacts deciding at once can't leave the row in an
+ * between two requests deciding at once can't leave the row in an
  * inconsistent state, and a second decision attempt after the first
  * has already landed is rejected (returns null) rather than silently
  * overwriting it. There's no staff/admin auth model in this app to
  * carve out a legitimate "override" actor, so once decided, it's
- * final from here.
+ * final from here. No caller identity is recorded — ownership is
+ * already checked at the route level before this is called, and there
+ * is nowhere left to attribute a decision to (see the login-model
+ * refactor that dropped decidedByContactId).
  */
-export async function decideVideoReview(
-  photoId: string,
-  contactId: string,
-  decision: "approve" | "revise"
-) {
+export async function decideVideoReview(photoId: string, decision: "approve" | "revise") {
   await getOrCreateVideoReview(photoId);
 
   const status: VideoReviewStatus = decision === "approve" ? "approved" : "revision_requested";
   const [updated] = await db
     .update(videoReviews)
-    .set({ status, decidedAt: new Date().toISOString(), decidedByContactId: contactId })
+    .set({ status, decidedAt: new Date().toISOString() })
     .where(and(eq(videoReviews.photoId, photoId), eq(videoReviews.status, "awaiting_notes")))
     .returning();
 
@@ -608,7 +637,6 @@ export async function listVideosWithPendingNotes() {
   const pendingNotes = await db.query.videoNotes.findMany({
     where: isNull(videoNotes.addressedAt),
     orderBy: asc(videoNotes.timestampSeconds),
-    with: { contact: true },
   });
   if (pendingNotes.length === 0) return [];
 

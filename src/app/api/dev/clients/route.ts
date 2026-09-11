@@ -1,29 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient, createClientContact, getClientById, setClientRelationshipStage } from "@/lib/queries";
+import {
+  createClient,
+  getClientById,
+  setClientAccessCode,
+  setClientRelationshipStage,
+} from "@/lib/queries";
 import { relationshipStageEnum } from "@/db/schema";
 
 /**
- * DEV-ONLY: seeds a client contact so the login flow has something to
- * log in as. There is no FOTOFOTO-staff-facing "add a contact" UI yet
- * (future work) — this is the stand-in until that exists, and it must
- * not be reachable in production.
+ * DEV-ONLY: seeds a client (one shared access code, no per-person
+ * contact) so the login flow has something to log in as. There is no
+ * FOTOFOTO-staff-facing UI for this beyond /admin/clients — this is a
+ * faster stand-in for local dev, and it must not be reachable in
+ * production.
  *
- * Pass `clientId` to add a contact to an existing client, or
- * `companyName` to create a new client first. `relationshipStage`
+ * Pass `clientId` to update an existing client's code/stage, or
+ * `companyName` + `accessCode` to create a new one. `relationshipStage`
  * (default "foundation") gates the Communication Health card — see
- * EntryCards.tsx — and can also be set on an existing client via
- * `clientId` alone with no contact fields, for testing the gate.
+ * EntryCards.tsx.
  */
 const Body = z
   .object({
     clientId: z.string().min(1).optional(),
     companyName: z.string().min(1).optional(),
     opsClientId: z.string().min(1).optional(),
+    accessCode: z.string().min(1),
     relationshipStage: z.enum(relationshipStageEnum).optional(),
-    name: z.string().min(1).optional(),
-    department: z.string().min(1).optional(),
-    email: z.email().optional(),
   })
   .refine((v) => v.clientId || v.companyName, {
     message: "Provide either clientId (existing client) or companyName (creates a new one).",
@@ -38,29 +41,19 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { clientId, companyName, opsClientId, relationshipStage, name, department, email } = parsed.data;
+  const { clientId, companyName, opsClientId, accessCode, relationshipStage } = parsed.data;
 
   let resolvedClientId = clientId ?? null;
   if (resolvedClientId) {
     const existing = await getClientById(resolvedClientId);
     if (!existing) return NextResponse.json({ error: "Client not found" }, { status: 404 });
     if (relationshipStage) await setClientRelationshipStage(resolvedClientId, relationshipStage);
+    await setClientAccessCode(resolvedClientId, accessCode);
   } else {
-    const client = await createClient({ companyName: companyName!, opsClientId, relationshipStage });
+    const client = await createClient({ companyName: companyName!, accessCode, opsClientId, relationshipStage });
     resolvedClientId = client!.id;
   }
 
-  if (!name || !department || !email) {
-    const client = await getClientById(resolvedClientId);
-    return NextResponse.json({ client }, { status: 200 });
-  }
-
-  const contact = await createClientContact({
-    clientId: resolvedClientId,
-    name,
-    department,
-    email,
-  });
-
-  return NextResponse.json({ contact }, { status: 201 });
+  const client = await getClientById(resolvedClientId);
+  return NextResponse.json({ client }, { status: clientId ? 200 : 201 });
 }

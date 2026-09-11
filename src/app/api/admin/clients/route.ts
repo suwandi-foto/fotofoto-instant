@@ -3,8 +3,8 @@ import { z } from "zod";
 import { isStaff } from "@/lib/staffSession";
 import {
   createClient,
-  createClientContact,
   getClientById,
+  setClientAccessCode,
   setClientRelationshipStage,
 } from "@/lib/queries";
 import { relationshipStageEnum } from "@/db/schema";
@@ -14,21 +14,18 @@ const Body = z
     clientId: z.string().min(1).optional(),
     companyName: z.string().min(1).optional(),
     relationshipStage: z.enum(relationshipStageEnum),
-    name: z.string().min(1),
-    department: z.string().min(1),
-    email: z.email(),
+    accessCode: z.string().min(1),
   })
   .refine((v) => v.clientId || v.companyName, {
     message: "Provide either clientId (existing client) or companyName (creates a new one).",
   });
 
 /**
- * Staff-gated replacement for the dev-only POST /api/dev/contacts
- * seeding route (which is hard-disabled in production, on purpose —
- * it has no auth of its own). Same underlying logic, just behind real
- * staff auth so it works identically in production: create/reuse a
- * client, add a named contact, and hand back the generated access
- * code for staff to copy and send to the client (see /admin/clients).
+ * Staff-gated manual fallback for provisioning/rotating a client's
+ * access code directly — see /admin/clients. The primary path is now
+ * fotofoto-ops's inbound call to POST /api/ops/clients; this stays for
+ * clients with no fotofoto-ops record yet, or a code rotation this app
+ * has no way to request from that side.
  */
 export async function POST(req: NextRequest) {
   if (!(await isStaff())) {
@@ -39,25 +36,25 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { clientId, companyName, relationshipStage, name, department, email } = parsed.data;
-
-  let resolvedClientId = clientId ?? null;
-  if (resolvedClientId) {
-    const existing = await getClientById(resolvedClientId);
-    if (!existing) return NextResponse.json({ error: "Client not found" }, { status: 404 });
-    await setClientRelationshipStage(resolvedClientId, relationshipStage);
-  } else {
-    const client = await createClient({ companyName: companyName!, relationshipStage });
-    resolvedClientId = client!.id;
-  }
+  const { clientId, companyName, relationshipStage, accessCode } = parsed.data;
 
   try {
-    const contact = await createClientContact({ clientId: resolvedClientId, name, department, email });
-    return NextResponse.json({ contact }, { status: 201 });
+    let client;
+    if (clientId) {
+      const existing = await getClientById(clientId);
+      if (!existing) return NextResponse.json({ error: "Client not found" }, { status: 404 });
+      await setClientRelationshipStage(clientId, relationshipStage);
+      await setClientAccessCode(clientId, accessCode);
+      client = await getClientById(clientId);
+    } else {
+      client = await createClient({ companyName: companyName!, accessCode, relationshipStage });
+    }
+    return NextResponse.json({ client }, { status: clientId ? 200 : 201 });
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "23505") {
-      return NextResponse.json({ error: "A contact with that email already exists." }, { status: 409 });
+    const constraint = (err as { constraint?: string }).constraint;
+    if (code === "23505" && constraint === "clients_access_code_unique") {
+      return NextResponse.json({ error: "That access code is already in use." }, { status: 409 });
     }
     throw err;
   }
