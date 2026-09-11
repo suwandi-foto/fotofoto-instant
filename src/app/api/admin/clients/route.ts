@@ -6,6 +6,7 @@ import {
   getClientById,
   setClientAccessCode,
   setClientRelationshipStage,
+  pgError,
 } from "@/lib/queries";
 import { relationshipStageEnum } from "@/db/schema";
 
@@ -51,8 +52,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ client }, { status: clientId ? 200 : 201 });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    const constraint = (err as { constraint?: string }).constraint;
+    const { code, constraint } = pgError(err);
     if (code === "23505" && constraint === "clients_access_code_unique") {
       return NextResponse.json({ error: "That access code is already in use." }, { status: 409 });
     }

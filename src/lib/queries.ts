@@ -26,6 +26,15 @@ import { eq, and, asc, desc, isNull } from "drizzle-orm";
 import { generateId, generateSlug, generateVoucherCode } from "./ids";
 import type { ColorStats } from "./image";
 
+/** Drizzle wraps the underlying driver's Postgres error in its own
+ * DrizzleQueryError, so `code`/`constraint` live on `err.cause`, not
+ * on `err` itself — checking `err.code` directly is always undefined
+ * and silently defeats every unique-violation retry/handling below. */
+export function pgError(err: unknown): { code?: string; constraint?: string } {
+  const cause = (err as { cause?: { code?: string; constraint?: string } }).cause;
+  return { code: cause?.code, constraint: cause?.constraint };
+}
+
 export async function createEvent(input: {
   name: string;
   clientName: string;
@@ -340,8 +349,7 @@ export async function createReferral(input: {
       });
       return db.query.referrals.findFirst({ where: eq(referrals.id, id) });
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code !== "23505" || attempt === maxAttempts) throw err;
+      if (pgError(err).code !== "23505" || attempt === maxAttempts) throw err;
     }
   }
   throw new Error("Could not generate a unique voucher code.");
@@ -433,8 +441,7 @@ export async function upsertClientFromOps(input: {
         })
         .where(eq(clients.id, existing.id));
     } catch (err) {
-      const constraint = (err as { code?: string; constraint?: string }).constraint;
-      if (constraint === "clients_access_code_unique") throw new AccessCodeConflictError();
+      if (pgError(err).constraint === "clients_access_code_unique") throw new AccessCodeConflictError();
       throw err;
     }
     return { created: false, client: (await getClientById(existing.id))! };
@@ -449,7 +456,7 @@ export async function upsertClientFromOps(input: {
     });
     return { created: true, client: client! };
   } catch (err) {
-    const constraint = (err as { code?: string; constraint?: string }).constraint;
+    const constraint = pgError(err).constraint;
     if (constraint === "clients_ops_client_id_unique") {
       // Race: another request inserted this opsClientId between our
       // lookup and our insert — retry as an update.
@@ -536,8 +543,7 @@ export async function togglePhotoReaction(photoId: string, clientId: string) {
     try {
       await db.insert(photoReactions).values({ id: generateId(), photoId, clientId });
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code !== "23505") throw err;
+      if (pgError(err).code !== "23505") throw err;
     }
   }
 
