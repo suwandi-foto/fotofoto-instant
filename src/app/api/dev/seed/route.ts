@@ -16,7 +16,6 @@ import {
   decideVideoReview,
   createFeedback,
   createReferral,
-  createAuthToken,
 } from "@/lib/queries";
 import { putObject, originalKey, previewKey } from "@/lib/storage";
 import { processCapturedPhoto } from "@/lib/image";
@@ -209,17 +208,13 @@ export async function POST(req: Request) {
     await toggleSelectionItem(eventB!.id, photoId);
   }
 
-  const { token } = await createAuthToken(sarah!.id);
-  const loginUrl = new URL(`/api/auth/consume?token=${token}`, origin).toString();
-
   return NextResponse.json({
     ok: true,
     client: { id: client!.id, companyName: client!.companyName, opsClientId: client!.opsClientId },
     contacts: [
-      { name: sarah!.name, email: sarah!.email },
-      { name: budi!.name, email: budi!.email },
+      { name: sarah!.name, email: sarah!.email, accessCode: sarah!.accessCode },
+      { name: budi!.name, email: budi!.email, accessCode: budi!.accessCode },
     ],
-    loginUrl,
     events: [
       { name: eventA!.name, slug: eventA!.slug, tier: eventA!.tier, galleryUrl: `${origin}/e/${eventA!.slug}`, videoReviewUrl: `${origin}/e/${eventA!.slug}/video/${videoId}` },
       { name: eventB!.name, slug: eventB!.slug, tier: eventB!.tier, galleryUrl: `${origin}/e/${eventB!.slug}` },

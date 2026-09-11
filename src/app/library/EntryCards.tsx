@@ -1,10 +1,8 @@
 import Link from "next/link";
 
 /**
- * Two link-out entry points from design-reference/Main.dc.html,
- * scoped down to plain links (no session/auto-login into fotofoto-ops
- * — that's the confirmed single-sign-on non-goal for this pass, and
- * no live ACTR/Communication-Health data is fetched here since that
+ * Two link-out entry points from design-reference/Main.dc.html. No
+ * live ACTR/Communication-Health data is fetched here since that
  * screen and its scoring now live entirely in fotofoto-ops — see
  * mcmm_sessions / communication_health_data in that repo's app.py,
  * shared between its staff Client Detail page and its own client
@@ -12,14 +10,14 @@ import Link from "next/link";
  *
  * Communication Health is gated on the client's relationshipStage
  * (Growth Partner+ only, per the confirmed scoping) — a Foundation
- * client sees a locked/upsell card instead of a link. The card links
- * to fotofoto-ops's own portal dashboard, which requires a *separate*
- * ops-portal login (no SSO); an earlier version of this link pointed
- * at /portal/projects/<opsClientId> as if that id were a project id
- * owned by whoever happened to already be logged into that portal,
- * which 404s for anyone else — this points at the portal's login/
- * dashboard entry point instead, which is the honest "the real thing
- * lives over there" link given no SSO exists.
+ * client sees a locked/upsell card instead of a link. When entitled
+ * and connected, the card now routes through GET /api/sso/ops (not a
+ * bare link to fotofoto-ops) — that route mints a short-lived signed
+ * handoff token and redirects, landing the client on the ops portal
+ * already logged in, no second credential entry (see
+ * src/lib/opsSso.ts). If there's no opsClientId to hand off, the card
+ * stays link-less with a "Not yet connected" subtitle, same as before
+ * SSO existed.
  */
 
 function CardShell({
@@ -110,7 +108,7 @@ export function CommunicationHealthCard({
   relationshipStage: "foundation" | "growth_partner" | "enterprise";
 }) {
   const entitled = relationshipStage !== "foundation";
-  const href = entitled && opsClientId ? "https://fotofoto-ops.vercel.app/portal" : null;
+  const href = entitled && opsClientId ? "/api/sso/ops" : null;
 
   const subtitle = !entitled
     ? "Upgrade to Growth Partner to see your ACTR score and roadmap"

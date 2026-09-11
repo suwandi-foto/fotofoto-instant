@@ -1,4 +1,4 @@
-import { customAlphabet, nanoid } from "nanoid";
+import { customAlphabet } from "nanoid";
 
 // Unambiguous alphabet (no 0/O, 1/I/l) since event slugs may get typed
 // in manually if a QR scan fails.
@@ -13,8 +13,8 @@ export const generateId = customAlphabet(idAlphabet, 16);
 const generateVoucherSuffix = customAlphabet(slugAlphabet, 5);
 export const generateVoucherCode = () => `FOTO-REF-${generateVoucherSuffix()}`;
 
-// Magic-link auth tokens are never read or typed by hand, so they use
-// nanoid's full default alphabet (URL-safe) at a longer length for
-// unguessability (~190 bits of entropy) rather than the short
-// unambiguous alphabets above.
-export const generateAuthToken = () => nanoid(32);
+// Client access codes are staff-issued over WhatsApp/etc. and typed
+// back in by the client, so — same reasoning as generateSlug above —
+// they use the unambiguous alphabet, at a length that's still easy to
+// read and type over chat.
+export const generateAccessCode = customAlphabet(slugAlphabet, 7);

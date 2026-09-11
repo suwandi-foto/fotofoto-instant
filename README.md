@@ -42,7 +42,11 @@ free tier works well) and, for Google Drive photo storage,
 `node scripts/drive-auth.mjs` (see "Photo storage" above). Set
 `SESSION_SECRET` too before deploying anywhere real — it signs the
 client-contact login cookie (see "Client-contact login" below) and
-falls back to an insecure dev value only outside production.
+falls back to an insecure dev value only outside production. Set
+`FOTOFOTO_SSO_SECRET` as well if you want the Communication Health
+card's fotofoto-ops handoff to work (see "Single sign-on to
+fotofoto-ops" below) — unlike `SESSION_SECRET` it has no dev fallback,
+since it must match the value set in fotofoto-ops's own environment.
 
 ```bash
 npm install
@@ -97,20 +101,27 @@ upcoming Photo Detail and Video Review screens — both need to show
 *who* left a pin annotation or revision note ("Sarah (Marketing)",
 "You"), which the QR/link model can't answer on its own.
 
-- `clients` / `clientContacts` / `authTokens` in `src/db/schema.ts`.
-  `clients` is intentionally minimal and separate from the CRM's
-  Client entity in the `fotofoto-ops` codebase — `opsClientId` is a
-  loose, nullable cross-reference, not a mirror of that data.
-- Passwordless magic-link flow: `POST /api/auth/request-link` issues a
-  30-minute single-use token for a seeded contact's email;
-  `GET /api/auth/consume?token=...` redeems it, sets a signed
+- `clients` / `clientContacts` in `src/db/schema.ts`. `clients` is
+  intentionally minimal and separate from the CRM's Client entity in
+  the `fotofoto-ops` codebase — `opsClientId` is a loose, nullable
+  cross-reference, not a mirror of that data.
+- Access-code login, one field/one step: each `clientContacts` row has
+  a standing `accessCode` (short, unambiguous alphabet, generated on
+  creation — see `generateAccessCode` in `src/lib/ids.ts`), handed to
+  the client directly (e.g. over WhatsApp) rather than emailed.
+  `POST /api/auth/login` looks the code up, sets a signed
   `ff_contact_session` cookie (HMAC-SHA256 via `src/lib/session.ts`,
-  no extra dependency), and redirects to `/library`. Real email
-  delivery doesn't exist yet — `request-link` returns the raw link
-  inline instead (see the dev-only comment on that route).
-- There's no staff-facing "add a contact" UI yet — seed one via
-  `POST /api/dev/contacts` (blocked outside `NODE_ENV !== "production"`),
-  e.g.:
+  no extra dependency), and the client lands on `/library`. Unlike the
+  magic-link token this replaced, the code isn't single-use or
+  time-limited — it's a real credential, valid until staff issues a
+  new one (there's no regenerate/revoke UI yet — see AGENTS.md's build
+  doc for that as flagged follow-up work).
+- The real, production-safe way to create a client contact and see
+  their code is the staff-gated `/admin/clients` page (same
+  `STAFF_PASSWORD` auth as `/admin/feedback`), backed by
+  `POST /api/admin/clients`. `POST /api/dev/contacts` still exists as
+  a `curl`-able dev shortcut (blocked outside
+  `NODE_ENV !== "production"`), e.g.:
   ```bash
   curl -X POST http://localhost:3000/api/dev/contacts \
     -H "Content-Type: application/json" \
@@ -119,6 +130,43 @@ upcoming Photo Detail and Video Review screens — both need to show
 - `getCurrentContact()` and the `formatAuthorName()` "You" helper
   (both in `src/lib/session.ts`) are what Photo Detail/Video Review
   are expected to build on.
+
+## Single sign-on to fotofoto-ops
+
+The Communication Health card (see `CommunicationHealthCard` in
+`src/app/library/EntryCards.tsx`) links a logged-in contact through to
+their ACTR score/roadmap on the separate `fotofoto-ops` app
+(`fotofoto-ops.vercel.app`) *already authenticated* — no second
+credential prompt on that side.
+
+- Only outbound (instant → ops) is built here; the reverse direction
+  is a separate build in the `fotofoto-ops` repo.
+- The card's href is `GET /api/sso/ops`, not a bare link — that route
+  mints a short-lived signed handoff token at click time (see
+  `src/lib/opsSso.ts`) and 302s to
+  `https://fotofoto-ops.vercel.app/portal/sso?token=...`. Minting it at
+  click time, rather than baking one into `/library`'s rendered HTML,
+  matters because the token expires in 60 seconds — long enough to
+  cover the redirect, but it could easily lapse between a page load
+  and an actual click.
+- The token is `base64url(JSON payload) + "." + base64url(HMAC-SHA256
+  signature)`, signed with `FOTOFOTO_SSO_SECRET` — the same value must
+  be set in both this app's environment (Hostinger) and fotofoto-ops's
+  (Vercel), or the ops side can't verify what this app signed. There's
+  no dev fallback for this one (see "Running it" above).
+- 60 seconds is the only replay protection — there's no nonce store
+  tracking already-used tokens. Accepted tradeoff for this pass, not
+  an oversight.
+- The handoff only fires when the contact's client has both an
+  entitling `relationshipStage` (`growth_partner`/`enterprise`) *and*
+  a non-null `opsClientId`. **`opsClientId` isn't populated by any
+  production-reachable path today** — `/admin/clients` (the real
+  staff-facing contact-creation page) doesn't collect it yet, so every
+  real client currently has `opsClientId = null` and the card renders
+  as the disabled "Not yet connected" state. Wiring up how staff set
+  `opsClientId` (a field on `/admin/clients`, a lookup against
+  fotofoto-ops, a sync job — TBD) is a known gap, not something this
+  pass invented data to paper over.
 
 ## Photo Detail (pin annotations, reactions, share)
 

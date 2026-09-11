@@ -187,6 +187,12 @@ export const clients = pgTable("clients", {
  * annotations, Video Review notes need to show *who* left a note).
  * `department` is free text, not an enum — whatever the client calls
  * their own team ("Marketing," "Sales," "Ops," ...).
+ *
+ * `accessCode` is a standing, staff-issued login credential (not a
+ * single-use token) — generated once when the contact is created (see
+ * createClientContact) and handed to the client directly, e.g. over
+ * WhatsApp. It's deliberately per-contact rather than per-client so
+ * pin annotations and video notes keep attributing to a named person.
  */
 export const clientContacts = pgTable("client_contacts", {
   id: text("id").primaryKey(),
@@ -196,25 +202,7 @@ export const clientContacts = pgTable("client_contacts", {
   name: text("name").notNull(),
   department: text("department").notNull(),
   email: text("email").notNull().unique(),
-  createdAt: text("created_at")
-    .notNull()
-    .$defaultFn(isoNow),
-});
-
-/**
- * Single-use magic-link token for the passwordless login flow — no
- * passwords anywhere in this app. `consumedAt` is set the moment a
- * token is redeemed so it can never be replayed, independent of
- * `expiresAt`.
- */
-export const authTokens = pgTable("auth_tokens", {
-  id: text("id").primaryKey(),
-  contactId: text("contact_id")
-    .notNull()
-    .references(() => clientContacts.id, { onDelete: "cascade" }),
-  token: text("token").notNull().unique(),
-  expiresAt: text("expires_at").notNull(),
-  consumedAt: text("consumed_at"),
+  accessCode: text("access_code").notNull().unique(),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(isoNow),
@@ -345,16 +333,8 @@ export const clientsRelations = relations(clients, ({ many }) => ({
   events: many(events),
 }));
 
-export const clientContactsRelations = relations(clientContacts, ({ one, many }) => ({
+export const clientContactsRelations = relations(clientContacts, ({ one }) => ({
   client: one(clients, { fields: [clientContacts.clientId], references: [clients.id] }),
-  authTokens: many(authTokens),
-}));
-
-export const authTokensRelations = relations(authTokens, ({ one }) => ({
-  contact: one(clientContacts, {
-    fields: [authTokens.contactId],
-    references: [clientContacts.id],
-  }),
 }));
 
 export const customPresetsRelations = relations(customPresets, ({ one }) => ({

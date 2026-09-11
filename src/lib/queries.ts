@@ -10,7 +10,6 @@ import {
   referrals,
   clients,
   clientContacts,
-  authTokens,
   photoAnnotations,
   photoReactions,
   videoNotes,
@@ -25,7 +24,7 @@ import {
   type RelationshipStage,
 } from "@/db/schema";
 import { eq, and, asc, desc, isNull } from "drizzle-orm";
-import { generateId, generateSlug, generateVoucherCode, generateAuthToken } from "./ids";
+import { generateId, generateSlug, generateVoucherCode, generateAccessCode } from "./ids";
 import type { ColorStats } from "./image";
 
 export async function createEvent(input: {
@@ -354,8 +353,8 @@ export async function getClientById(id: string) {
   return row ?? null;
 }
 
-/** Dev-only path for now — see POST /api/dev/contacts. A real
- * "FOTOFOTO staff adds a client contact" UI is future work. */
+/** Staff-facing creation path — see POST /api/admin/clients (and the
+ * dev-only POST /api/dev/contacts, which calls the same function). */
 export async function createClient(input: {
   companyName: string;
   opsClientId?: string | null;
@@ -371,6 +370,10 @@ export async function createClient(input: {
   return getClientById(id);
 }
 
+export async function listClients() {
+  return db.query.clients.findMany({ orderBy: desc(clients.createdAt) });
+}
+
 export async function setClientRelationshipStage(clientId: string, stage: RelationshipStage) {
   await db.update(clients).set({ relationshipStage: stage }).where(eq(clients.id, clientId));
 }
@@ -380,28 +383,46 @@ export async function getContactById(id: string) {
   return row ?? null;
 }
 
-export async function getContactByEmail(email: string) {
+export async function getContactByAccessCode(accessCode: string) {
   const row = await db.query.clientContacts.findFirst({
-    where: eq(clientContacts.email, email.toLowerCase()),
+    where: eq(clientContacts.accessCode, accessCode.trim().toUpperCase()),
   });
   return row ?? null;
 }
 
+/** Generates a unique access code server-side and retries on the rare
+ * collision, same pattern as createReferral's voucher code. A
+ * collision on the contact's email unique constraint is a real error
+ * (a genuine duplicate contact), not a code clash, so that's rethrown
+ * immediately rather than retried. */
 export async function createClientContact(input: {
   clientId: string;
   name: string;
   department: string;
   email: string;
 }) {
-  const id = generateId();
-  await db.insert(clientContacts).values({
-    id,
-    clientId: input.clientId,
-    name: input.name,
-    department: input.department,
-    email: input.email.toLowerCase(),
-  });
-  return getContactById(id);
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const id = generateId();
+    const accessCode = generateAccessCode();
+    try {
+      await db.insert(clientContacts).values({
+        id,
+        clientId: input.clientId,
+        name: input.name,
+        department: input.department,
+        email: input.email.toLowerCase(),
+        accessCode,
+      });
+      return getContactById(id);
+    } catch (err) {
+      const code = (err as { code?: string; constraint?: string }).code;
+      const constraint = (err as { constraint?: string }).constraint;
+      const isAccessCodeClash = code === "23505" && constraint === "client_contacts_access_code_unique";
+      if (!isAccessCodeClash || attempt === maxAttempts) throw err;
+    }
+  }
+  throw new Error("Could not generate a unique access code.");
 }
 
 export async function listClientEvents(clientId: string) {
@@ -421,37 +442,6 @@ const EVENT_ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
  * render by this repo's eslint react-hooks/purity rule. */
 export function isEventArchived(createdAt: string): boolean {
   return Date.now() - new Date(createdAt).getTime() > EVENT_ARCHIVE_AFTER_MS;
-}
-
-const AUTH_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes, same window as the rest of this pass's magic link
-
-export async function createAuthToken(contactId: string) {
-  const id = generateId();
-  const token = generateAuthToken();
-  const expiresAt = new Date(Date.now() + AUTH_TOKEN_TTL_MS).toISOString();
-  await db.insert(authTokens).values({ id, contactId, token, expiresAt });
-  return { token, expiresAt };
-}
-
-/**
- * Atomically single-use-consumes a token: the UPDATE only matches a
- * row that hasn't been consumed yet, so two concurrent requests for
- * the same token can never both succeed (no separate check-then-act
- * race). Expiry is checked afterward — an expired token still ends up
- * marked consumed (so it can never be retried either way) but is
- * rejected here same as an unknown or already-used one.
- */
-export async function consumeAuthToken(token: string) {
-  const [consumed] = await db
-    .update(authTokens)
-    .set({ consumedAt: new Date().toISOString() })
-    .where(and(eq(authTokens.token, token), isNull(authTokens.consumedAt)))
-    .returning();
-
-  if (!consumed) return null;
-  if (new Date(consumed.expiresAt).getTime() < Date.now()) return null;
-
-  return getContactById(consumed.contactId);
 }
 
 /** Chronological (oldest-first) so the pin number shown in the photo
