@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
 import { Logo } from "@/app/Logo";
 import { getCurrentClient } from "@/lib/session";
-import { listClientEvents, getClientById, isEventArchived } from "@/lib/queries";
+import { listClientEvents, getClientById, isEventArchived, listClientDeliverables } from "@/lib/queries";
 import { LogoutButton } from "./LogoutButton";
 import { EventLibrary } from "./EventLibrary";
 import { CommunicationHealthCard, FeedbackCard } from "./EntryCards";
+import { DeliverablesSection } from "./DeliverablesSection";
 
 export const dynamic = "force-dynamic";
 
@@ -19,9 +20,10 @@ export default async function LibraryPage() {
   const session = await getCurrentClient();
   if (!session) redirect("/login");
 
-  const [client, events] = await Promise.all([
+  const [client, events, deliverables] = await Promise.all([
     getClientById(session.clientId),
     listClientEvents(session.clientId),
+    listClientDeliverables(session.clientId),
   ]);
 
   const eventRows = events.map((e) => ({
@@ -53,6 +55,10 @@ export default async function LibraryPage() {
 
       <div className="mb-8">
         <EventLibrary events={eventRows} />
+      </div>
+
+      <div className="mb-8">
+        <DeliverablesSection deliverables={deliverables} />
       </div>
 
       <div className="flex flex-col gap-2.5">

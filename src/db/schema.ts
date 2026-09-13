@@ -187,6 +187,39 @@ export const clients = pgTable("clients", {
 });
 
 /**
+ * One expected deliverable ops has told us about for a client, e.g.
+ * "Athalla's Birthday / Video / 60-second recap video / In Progress."
+ * Pushed by fotofoto-ops alongside every POST /api/ops/clients call
+ * (see that route and upsertClientFromOps in queries.ts) — ops always
+ * sends the client's *full current list*, not a diff, so a repeat call
+ * replaces every row here for that client rather than appending to it.
+ * `project` groups deliverables that share an ops-side project (this
+ * app's login is one shared code per client, not per project, so the
+ * client's own view groups by this field rather than showing a flat
+ * list). `type`/`status` are ops's own free-text catalog values, not
+ * enums here — ops can add new ones without a schema change on this
+ * side, and `status` is informational only (ops re-pushes it on its own
+ * schedule, not synced live).
+ */
+export const clientDeliverables = pgTable("client_deliverables", {
+  id: text("id").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  project: text("project").notNull(),
+  type: text("type").notNull(),
+  description: text("description").notNull(),
+  status: text("status").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
+export const clientDeliverablesRelations = relations(clientDeliverables, ({ one }) => ({
+  client: one(clients, { fields: [clientDeliverables.clientId], references: [clients.id] }),
+}));
+
+/**
  * A pinned note on one exact spot of a photo — Photo Detail's
  * annotation feature. `xPct`/`yPct` (0-100) are relative to the
  * image's own dimensions, not pixels, so a pin stays correctly placed
@@ -305,6 +338,7 @@ export const videoReviewsRelations = relations(videoReviews, ({ one }) => ({
 
 export const clientsRelations = relations(clients, ({ many }) => ({
   events: many(events),
+  deliverables: many(clientDeliverables),
 }));
 
 export const customPresetsRelations = relations(customPresets, ({ one }) => ({

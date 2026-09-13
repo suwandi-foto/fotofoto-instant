@@ -14,6 +14,7 @@ import {
   videoNotes,
   videoReviews,
   adminFeedback,
+  clientDeliverables,
   type Tier,
   type Preset,
   type PresetId,
@@ -411,6 +412,44 @@ export async function getClientByOpsClientId(opsClientId: string) {
 
 export class AccessCodeConflictError extends Error {}
 
+export type OpsDeliverable = {
+  project: string;
+  type: string;
+  description: string;
+  status: string;
+};
+
+/** Swaps in exactly this list for the client — ops always sends its
+ * full current deliverables list, not a diff, so every previous row is
+ * dropped rather than merged. Not wrapped in a transaction (the
+ * neon-http driver call site here has no other precedent for one in
+ * this file); a request landing mid-swap just sees a briefly shorter
+ * list, which is acceptable for this informational, staff-repushed-only
+ * data. */
+async function replaceClientDeliverables(clientId: string, deliverables: OpsDeliverable[]) {
+  await db.delete(clientDeliverables).where(eq(clientDeliverables.clientId, clientId));
+  if (deliverables.length === 0) return;
+  await db.insert(clientDeliverables).values(
+    deliverables.map((d) => ({
+      id: generateId(),
+      clientId,
+      project: d.project,
+      type: d.type,
+      description: d.description,
+      status: d.status,
+    }))
+  );
+}
+
+/** Ordered by project first so callers can group consecutive rows
+ * without a second pass, then by insertion order within a project. */
+export async function listClientDeliverables(clientId: string) {
+  return db.query.clientDeliverables.findMany({
+    where: eq(clientDeliverables.clientId, clientId),
+    orderBy: [asc(clientDeliverables.project), asc(clientDeliverables.createdAt)],
+  });
+}
+
 /**
  * The fotofoto-ops-driven provisioning path — see POST
  * /api/ops/clients. `opsClientId` is the idempotency key: a repeat
@@ -421,13 +460,17 @@ export class AccessCodeConflictError extends Error {}
  * if a race loses the opsClientId uniqueness check; surfaces a
  * same-code-different-client collision as AccessCodeConflictError
  * rather than silently reassigning someone else's password.
+ * `deliverables` defaults to empty so older ops deployments that don't
+ * send the field yet behave the same as an explicit empty list.
  */
 export async function upsertClientFromOps(input: {
   opsClientId: string;
   companyName: string;
   accessCode: string;
   relationshipStage?: RelationshipStage;
+  deliverables?: OpsDeliverable[];
 }): Promise<{ created: boolean; client: NonNullable<Awaited<ReturnType<typeof getClientById>>> }> {
+  const deliverables = input.deliverables ?? [];
   const existing = await getClientByOpsClientId(input.opsClientId);
 
   if (existing) {
@@ -444,6 +487,7 @@ export async function upsertClientFromOps(input: {
       if (pgError(err).constraint === "clients_access_code_unique") throw new AccessCodeConflictError();
       throw err;
     }
+    await replaceClientDeliverables(existing.id, deliverables);
     return { created: false, client: (await getClientById(existing.id))! };
   }
 
@@ -454,6 +498,7 @@ export async function upsertClientFromOps(input: {
       opsClientId: input.opsClientId,
       relationshipStage: input.relationshipStage,
     });
+    await replaceClientDeliverables(client!.id, deliverables);
     return { created: true, client: client! };
   } catch (err) {
     const constraint = pgError(err).constraint;

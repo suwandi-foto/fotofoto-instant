@@ -28,11 +28,24 @@ function isAuthorized(req: NextRequest): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// project/type/description/status are all ops's own free text (type
+// and status are open catalogs ops can extend without warning us), so
+// nothing here is an enum — just require non-empty strings.
+const Deliverable = z.object({
+  project: z.string().min(1),
+  type: z.string().min(1),
+  description: z.string().min(1),
+  status: z.string().min(1),
+});
+
 const Body = z.object({
   opsClientId: z.string().min(1),
   companyName: z.string().min(1),
   accessCode: z.string().min(1),
   relationshipStage: z.enum(relationshipStageEnum).optional(),
+  // Optional so older, already-deployed ops builds that don't send this
+  // field yet keep working — treated the same as an explicit [].
+  deliverables: z.array(Deliverable).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -47,7 +60,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const { created, client } = await upsertClientFromOps(parsed.data);
-    return NextResponse.json({ created, client }, { status: created ? 201 : 200 });
+    // /library is the client's home screen right after login — there's
+    // no per-client gallery route (yet) to deep-link into instead.
+    const portalUrl = new URL("/library", req.nextUrl.origin).toString();
+    return NextResponse.json({ created, client: { ...client, portalUrl } }, { status: created ? 201 : 200 });
   } catch (err) {
     if (err instanceof AccessCodeConflictError) {
       return NextResponse.json(
