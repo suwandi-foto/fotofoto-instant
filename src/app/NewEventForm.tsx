@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-export function NewEventForm() {
+export function NewEventForm({ clients }: { clients: { id: string; companyName: string }[] }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [clientName, setClientName] = useState("");
+  const [clientId, setClientId] = useState("");
   const [tier, setTier] = useState<"full_access" | "select">("full_access");
   const [quota, setQuota] = useState(20);
   const [busy, setBusy] = useState(false);
@@ -25,12 +26,14 @@ export function NewEventForm() {
           clientName,
           tier,
           quota: tier === "select" ? quota : undefined,
+          clientId: clientId || undefined,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed to create event");
       router.refresh();
       setName("");
       setClientName("");
+      setClientId("");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -62,6 +65,25 @@ export function NewEventForm() {
           />
         </label>
       </div>
+
+      <label className="flex flex-col gap-1 text-sm text-text-dim">
+        Link to client portal account (optional)
+        <select
+          value={clientId}
+          onChange={(e) => setClientId(e.target.value)}
+          className="rounded-lg border border-border bg-panel-2 px-3 py-2 text-text outline-none focus:border-gold"
+        >
+          <option value="">Not linked — only reachable via its own link/QR</option>
+          {clients.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.companyName}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-text-dim-2">
+          When linked, this event shows up under that client&apos;s &quot;Your library&quot; at /library.
+        </span>
+      </label>
 
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-sm text-text-dim">

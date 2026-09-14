@@ -5,11 +5,16 @@ import Link from "next/link";
 import { NewEventForm } from "./NewEventForm";
 import { DeleteEventButton } from "./DeleteEventButton";
 import { Logo } from "./Logo";
+import { listClients } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const events = await db.query.events.findMany({ orderBy: desc(eventsTable.createdAt) });
+  const [events, clients] = await Promise.all([
+    db.query.events.findMany({ orderBy: desc(eventsTable.createdAt) }),
+    listClients(),
+  ]);
+  const clientNameById = new Map(clients.map((c) => [c.id, c.companyName]));
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-14">
@@ -25,7 +30,7 @@ export default async function Home() {
 
       <section className="mb-12 rounded-2xl border border-border bg-panel p-6">
         <h2 className="font-display text-lg font-semibold">New event</h2>
-        <NewEventForm />
+        <NewEventForm clients={clients.map((c) => ({ id: c.id, companyName: c.companyName }))} />
       </section>
 
       <section>
@@ -46,6 +51,13 @@ export default async function Home() {
                     <span className="text-gold">
                       {e.tier === "full_access" ? "Full access" : `Select (quota ${e.quota})`}
                     </span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-text-dim-2">
+                    {e.clientId ? (
+                      <>Linked to portal account: {clientNameById.get(e.clientId) ?? "unknown client"}</>
+                    ) : (
+                      "Not linked to a portal account — reachable only via its own link/QR"
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2 text-sm">

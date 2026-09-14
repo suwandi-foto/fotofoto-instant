@@ -41,6 +41,7 @@ export async function createEvent(input: {
   clientName: string;
   tier: Tier;
   quota?: number;
+  clientId?: string;
 }) {
   const id = generateId();
   const slug = generateSlug();
@@ -49,6 +50,7 @@ export async function createEvent(input: {
     slug,
     name: input.name,
     clientName: input.clientName,
+    clientId: input.clientId,
     tier: input.tier,
     quota: input.tier === "select" ? input.quota ?? 20 : 0,
     // Set explicitly rather than relying on the column's DB-level
