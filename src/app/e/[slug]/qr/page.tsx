@@ -1,5 +1,6 @@
 import { getEventBySlug } from "@/lib/queries";
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import QRCode from "qrcode";
 import { Logo } from "@/app/Logo";
 
@@ -12,10 +13,22 @@ export default async function EventQrPage({
   const event = await getEventBySlug(slug);
   if (!event) notFound();
 
-  // In production this would encode the real public URL; here it
-  // encodes the path so it's testable inside the dev sandbox too.
   const galleryPath = `/e/${event.slug}`;
-  const qrDataUrl = await QRCode.toDataURL(galleryPath, {
+  // A QR code has to encode a real, absolute URL — a bare path isn't
+  // a link a phone camera can open. Prefers APP_URL (must be set in
+  // any real deployment, same as POST /api/ops/clients' portalUrl —
+  // see that route's comment for why req-derived origins aren't
+  // reliable behind this app's reverse proxy); falls back to the
+  // request's own host so local dev keeps working without it set.
+  let origin = process.env.APP_URL;
+  if (!origin) {
+    const h = await headers();
+    const proto = h.get("x-forwarded-proto") ?? "http";
+    const host = h.get("host") ?? "localhost:3000";
+    origin = `${proto}://${host}`;
+  }
+  const galleryUrl = new URL(galleryPath, origin).toString();
+  const qrDataUrl = await QRCode.toDataURL(galleryUrl, {
     margin: 1,
     width: 480,
     color: { dark: "#000000", light: "#edeff1" },
@@ -35,7 +48,7 @@ export default async function EventQrPage({
         <img src={qrDataUrl} alt={`QR code for ${event.name}`} width={280} height={280} />
       </div>
       <div className="rounded-sm border border-border bg-panel-2 px-4 py-2 font-mono text-xs text-text-dim">
-        {galleryPath}
+        {galleryUrl}
       </div>
     </main>
   );
