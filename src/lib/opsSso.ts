@@ -1,15 +1,18 @@
 /**
- * Outbound SSO handoff into fotofoto-ops's client portal
- * (`https://fotofoto-ops.vercel.app/portal/sso`). Same signed-payload
- * shape as session.ts/staffSession.ts (HMAC-SHA256, base64url, no JWT
- * library), but signed with a *different* secret — `FOTOFOTO_SSO_SECRET`
- * — since this token crosses into a separately-deployed app that must
- * verify it with the exact same value. Deliberately no dev-only
+ * SSO handoff between this app and fotofoto-ops's client portal, in
+ * both directions: outbound (createOpsHandoffToken, into
+ * `https://fotofoto-ops.vercel.app/portal/sso`) and inbound
+ * (verifyOpsInboundToken, for tokens Ops appends to the portalUrl it
+ * got from POST /api/ops/clients). Same signed-payload shape as
+ * session.ts/staffSession.ts (HMAC-SHA256, base64url, no JWT library),
+ * but signed with a *different* secret — `FOTOFOTO_SSO_SECRET` — since
+ * these tokens cross into a separately-deployed app that must
+ * sign/verify with the exact same value. Deliberately no dev-only
  * fallback here (unlike SESSION_SECRET/STAFF_PASSWORD): a fallback
  * would only work if fotofoto-ops picked the identical fallback, which
  * defeats the point of a shared secret, so this always throws if unset.
  */
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 
 const SSO_TOKEN_TTL_SECONDS = 60;
 
@@ -63,4 +66,39 @@ export function createOpsHandoffToken(opsClientId: string, companyName: string):
   };
   const body = base64url(JSON.stringify(payload));
   return `${body}.${sign(body)}`;
+}
+
+type OpsInboundPayload = {
+  opsClientId: string;
+  companyName: string;
+  iat: number;
+  exp: number;
+};
+
+/**
+ * Verifies a token minted by fotofoto-ops for the reverse handoff (a
+ * client already logged into Ops's own /portal, clicking through to
+ * here). Mirrors createOpsHandoffToken's shape and secret in the
+ * opposite direction. Returns null for any failure — bad format, bad
+ * signature, or expired — rather than throwing, since the caller's
+ * contract is to fall through to the normal access-code login on any
+ * problem instead of surfacing an error.
+ */
+export function verifyOpsInboundToken(token: string): OpsInboundPayload | null {
+  const [body, signature] = token.split(".");
+  if (!body || !signature) return null;
+
+  const expected = sign(body);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as OpsInboundPayload;
+    if (typeof payload.opsClientId !== "string" || typeof payload.companyName !== "string") return null;
+    if (typeof payload.exp !== "number" || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }

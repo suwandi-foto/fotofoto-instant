@@ -15,10 +15,28 @@ export const dynamic = "force-dynamic";
  * live in the separate fotofoto-ops app — see EntryCards.tsx). The
  * Shop row (Calendar/Wall Print/Timeline) from the mockup is skipped —
  * commerce isn't built anywhere in this project yet.
+ *
+ * This is also the landing spot for the inbound SSO handoff from
+ * fotofoto-ops (the reverse of the Communication Health card's
+ * outbound one): Ops appends `?token=` to this exact URL, since it's
+ * the `portalUrl` returned from POST /api/ops/clients. A Server
+ * Component can't set the session cookie itself mid-render, so an
+ * unauthenticated visit carrying a token gets redirected through
+ * /api/sso/ops/inbound, which verifies it and establishes the session
+ * before sending the client back here. No token, or an already-active
+ * session, and this behaves exactly as before.
  */
-export default async function LibraryPage() {
+export default async function LibraryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ token?: string }>;
+}) {
+  const { token } = await searchParams;
   const session = await getCurrentClient();
-  if (!session) redirect("/login");
+  if (!session) {
+    if (token) redirect(`/api/sso/ops/inbound?token=${encodeURIComponent(token)}`);
+    redirect("/login");
+  }
 
   const [client, events, deliverables] = await Promise.all([
     getClientById(session.clientId),
