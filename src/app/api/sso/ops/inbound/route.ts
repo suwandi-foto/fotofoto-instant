@@ -17,6 +17,15 @@ import { createSession } from "@/lib/session";
  * redirects to /library without a session, so its own redirect to
  * /login takes over — identical to visiting /library with no token at
  * all. No error surfaced either way, per the handoff's contract.
+ *
+ * Redirects with a plain relative Location header rather than
+ * `NextResponse.redirect(new URL("/library", req.nextUrl.origin))`:
+ * behind this app's production reverse proxy, the incoming Host header
+ * isn't the public domain, so `req.nextUrl.origin` resolves to the
+ * server's own bind address and produces an unreachable absolute URL.
+ * A relative Location header sidesteps that — browsers resolve it
+ * against the request they actually made, same as how `redirect()`
+ * from next/navigation already behaves elsewhere in this app.
  */
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get("token");
@@ -29,5 +38,5 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.redirect(new URL("/library", req.nextUrl.origin));
+  return new NextResponse(null, { status: 307, headers: { Location: "/library" } });
 }
