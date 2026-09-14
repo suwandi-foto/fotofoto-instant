@@ -62,7 +62,18 @@ export async function POST(req: NextRequest) {
     const { created, client } = await upsertClientFromOps(parsed.data);
     // /library is the client's home screen right after login — there's
     // no per-client gallery route (yet) to deep-link into instead.
-    const portalUrl = new URL("/library", req.nextUrl.origin).toString();
+    //
+    // Built from APP_URL rather than req.nextUrl.origin: this app sits
+    // behind a reverse proxy in production that doesn't forward a
+    // usable Host header, so req.nextUrl.origin resolves to the
+    // server's own bind address (e.g. http://0.0.0.0:3000) instead of
+    // the public domain. That's harmless for same-origin redirects
+    // (browsers resolve a relative Location against the request they
+    // actually made) but portalUrl is handed to a *different* app
+    // (fotofoto-ops) to store and link to later, so it must be a real,
+    // fully-qualified URL. Falls back to req.nextUrl.origin so local
+    // dev keeps working without setting APP_URL.
+    const portalUrl = new URL("/library", process.env.APP_URL ?? req.nextUrl.origin).toString();
     return NextResponse.json({ created, client: { ...client, portalUrl } }, { status: created ? 201 : 200 });
   } catch (err) {
     if (err instanceof AccessCodeConflictError) {
