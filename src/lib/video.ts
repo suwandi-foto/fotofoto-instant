@@ -192,13 +192,5 @@ export async function transcodeVideoPreview(
   }
 }
 
-const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "webm", "m4v", "avi"]);
-
-export function isVideoContentType(contentType: string): boolean {
-  return contentType.toLowerCase().startsWith("video/");
-}
-
-export function isVideoFileName(fileName: string): boolean {
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  return !!ext && VIDEO_EXTENSIONS.has(ext);
-}
+// isVideoContentType/isVideoFileName moved to ./videoContentType — see
+// that file's doc comment for why they can't live here.

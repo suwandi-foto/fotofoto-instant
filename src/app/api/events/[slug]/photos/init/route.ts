@@ -4,7 +4,7 @@ import { createResumableUploadSession, rawUploadKey } from "@/lib/storage";
 import { presetEnum } from "@/db/schema";
 import { parseCustomPresetRef } from "@/lib/presetMeta";
 import { generateId } from "@/lib/ids";
-import { isVideoContentType } from "@/lib/video";
+import { isVideoContentType } from "@/lib/videoContentType";
 
 /**
  * POST: step 1 of a photo upload. Validates the preset and opens a

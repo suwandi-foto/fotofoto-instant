@@ -8,7 +8,7 @@ import {
   getCustomPreset,
 } from "@/lib/queries";
 import { processCapturedPhoto, type PresetSpec, type ColorStats } from "@/lib/image";
-import { extractVideoMeta, transcodeVideoPreview, isVideoContentType } from "@/lib/video";
+import { isVideoContentType } from "@/lib/videoContentType";
 import {
   getObject,
   putObject,
@@ -113,6 +113,13 @@ async function completePhoto(event: Event, rawKey: string, presetRaw: string) {
  * that would need Vercel's after()-keeps-alive guarantee instead.
  */
 async function completeVideo(event: Event, rawKey: string) {
+  // Loaded dynamically, and only here, so a plain photo upload (the
+  // vastly more common case — see completePhoto above) never pays the
+  // cost of loading @ffmpeg-installer/ffmpeg, and a host where that
+  // binary fails to resolve only breaks video uploads, not every
+  // upload — see videoContentType.ts's doc comment for the incident
+  // that prompted this.
+  const { extractVideoMeta, transcodeVideoPreview } = await import("@/lib/video");
   const photoId = await createQueuedPhoto(event.id, "original", "video");
 
   try {
