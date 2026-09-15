@@ -1,4 +1,4 @@
-import { getEventBySlug, getEventPresetsConfig } from "@/lib/queries";
+import { getEventBySlug, getEventPresetsConfig, listEventDeliverables } from "@/lib/queries";
 import { notFound } from "next/navigation";
 import { ShootApp } from "./ShootApp";
 import { BUILTIN_PRESET_META, customPresetRef } from "@/lib/presetMeta";
@@ -14,7 +14,10 @@ export default async function ShootPage({
   const event = await getEventBySlug(slug);
   if (!event) notFound();
 
-  const { builtins, custom } = await getEventPresetsConfig(event);
+  const [{ builtins, custom }, deliverables] = await Promise.all([
+    getEventPresetsConfig(event),
+    listEventDeliverables(event.id),
+  ]);
   const presets = [
     ...builtins.map((id) => ({
       id,
@@ -32,5 +35,12 @@ export default async function ShootPage({
       })),
   ];
 
-  return <ShootApp slug={event.slug} eventName={event.name} initialPresets={presets} />;
+  return (
+    <ShootApp
+      slug={event.slug}
+      eventName={event.name}
+      initialPresets={presets}
+      deliverables={deliverables.map((d) => ({ id: d.id, name: d.name, tier: d.tier, quota: d.quota }))}
+    />
+  );
 }

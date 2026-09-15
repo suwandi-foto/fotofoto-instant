@@ -65,6 +65,39 @@ export const events = pgTable("events", {
     .$defaultFn(isoNow),
 });
 
+export const deliverableStatusEnum = ["in_progress", "ready", "delivered"] as const;
+export type DeliverableStatus = (typeof deliverableStatusEnum)[number];
+
+/**
+ * One named, independently-tiered gallery within an event — e.g. a
+ * 200-photo "Normal Edit" (full_access) and a 20-photo "High Quality
+ * Edit" (select) living inside the same event, kept as separate
+ * albums rather than mixed into one gallery. Staff name and create
+ * these freely per event (no fixed catalog); every event has at least
+ * one, created alongside the event itself (see createEvent/
+ * createDeliverable in queries.ts).
+ *
+ * Distinct from the older `clientDeliverables` table below, which is
+ * an unrelated, ops-pushed, free-text-only status list with no real
+ * photo content — see that table's comment.
+ */
+export const eventDeliverables = pgTable("event_deliverables", {
+  id: text("id").primaryKey(),
+  eventId: text("event_id")
+    .notNull()
+    .references(() => events.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  tier: text("tier", { enum: tierEnum }).notNull(),
+  quota: integer("quota").notNull().default(0), // only meaningful for tier = select
+  extraUnitNote: text("extra_unit_note").default(
+    "Extra photos are invoiced separately by our team after the event."
+  ),
+  status: text("status", { enum: deliverableStatusEnum }).notNull().default("in_progress"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(isoNow),
+});
+
 export const photoKindEnum = ["photo", "video"] as const;
 export type PhotoKind = (typeof photoKindEnum)[number];
 
@@ -83,6 +116,21 @@ export const photos = pgTable("photos", {
   eventId: text("event_id")
     .notNull()
     .references(() => events.id, { onDelete: "cascade" }),
+  // Denormalized alongside eventId (derivable via the deliverable's own
+  // eventId, but kept flat here) so every existing eventId-keyed query
+  // — storage key helpers, cross-event admin views, client-ownership
+  // checks — stays untouched. The app enforces deliverable.eventId ===
+  // eventId at insert time (see createQueuedPhoto in queries.ts); Postgres
+  // can't express that cross-table constraint directly.
+  //
+  // Nullable for now — MIGRATION IN PROGRESS, same 3-step rollout as
+  // `selections` above. Every new photo gets one from the moment the
+  // upload path (Phase 1) ships; existing rows are nullable until
+  // scripts/backfill-deliverables.mjs runs, after which a follow-up
+  // change tightens this to notNull.
+  deliverableId: text("deliverable_id").references(() => eventDeliverables.id, {
+    onDelete: "cascade",
+  }),
   kind: text("kind", { enum: photoKindEnum }).notNull().default("photo"),
   preset: text("preset").notNull(), // a Preset id, or "custom:<customPresets.id>"
   status: text("status", { enum: photoStatusEnum }).notNull().default("queued"),
@@ -103,15 +151,29 @@ export const photos = pgTable("photos", {
 });
 
 /**
- * One shared selection per select-tier event (owned by the client
- * link holder, not per-guest — confirmed decision). Full-access
- * events never have a selections row.
+ * One shared selection per select-tier deliverable (owned by the
+ * client link holder, not per-guest — confirmed decision). Full-access
+ * deliverables never have a selections row. `deliverableId` is
+ * nullable-but-unique rather than notNull: Postgres allows any number
+ * of NULLs under a unique constraint, so this already correctly
+ * enforces "at most one selection per deliverable" for every row
+ * created from here on, without needing every pre-existing row
+ * populated first.
+ *
+ * MIGRATION IN PROGRESS: `eventId` used to be this table's anchor
+ * (notNull + unique — one selection per *event*), which would have
+ * blocked a second select-tier deliverable in the same event from
+ * ever getting its own selections row. Relaxed to nullable/non-unique
+ * and kept only so scripts/backfill-deliverables.mjs can read which
+ * event a pre-existing (pre-deliverables) selection belonged to; drop
+ * this column entirely once that script has run and been verified,
+ * and tighten deliverableId to notNull at the same time.
  */
 export const selections = pgTable("selections", {
   id: text("id").primaryKey(),
-  eventId: text("event_id")
-    .notNull()
-    .references(() => events.id, { onDelete: "cascade" })
+  eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }),
+  deliverableId: text("deliverable_id")
+    .references(() => eventDeliverables.id, { onDelete: "cascade" })
     .unique(),
   finalizedAt: text("finalized_at"), // null until the client hits "Finalize Selection"
 });
@@ -187,19 +249,26 @@ export const clients = pgTable("clients", {
 });
 
 /**
- * One expected deliverable ops has told us about for a client, e.g.
- * "Athalla's Birthday / Video / 60-second recap video / In Progress."
- * Pushed by fotofoto-ops alongside every POST /api/ops/clients call
- * (see that route and upsertClientFromOps in queries.ts) — ops always
- * sends the client's *full current list*, not a diff, so a repeat call
- * replaces every row here for that client rather than appending to it.
- * `project` groups deliverables that share an ops-side project (this
- * app's login is one shared code per client, not per project, so the
- * client's own view groups by this field rather than showing a flat
- * list). `type`/`status` are ops's own free-text catalog values, not
- * enums here — ops can add new ones without a schema change on this
- * side, and `status` is informational only (ops re-pushes it on its own
- * schedule, not synced live).
+ * SUPERSEDED by eventDeliverables (real, in-app deliverables with
+ * actual photos/videos — see that table above). This table is ops's
+ * older, free-text-only status list, with no link to any actual
+ * content: one expected deliverable ops has told us about for a
+ * client, e.g. "Athalla's Birthday / Video / 60-second recap video /
+ * In Progress." Pushed by fotofoto-ops alongside every
+ * POST /api/ops/clients call (see that route and upsertClientFromOps
+ * in queries.ts) — ops always sends the client's *full current list*,
+ * not a diff, so a repeat call replaces every row here for that
+ * client rather than appending to it. `project` groups deliverables
+ * that share an ops-side project (this app's login is one shared code
+ * per client, not per project). `type`/`status` are ops's own
+ * free-text catalog values, not enums here.
+ *
+ * Kept accepting and storing this push for backward compatibility
+ * with fotofoto-ops's existing behavior (a separate repo), but
+ * nothing in this app renders it anymore — /library's Deliverables
+ * section now reads eventDeliverables via
+ * listEventDeliverablesForClient instead. Do not build new features
+ * against this table.
  */
 export const clientDeliverables = pgTable("client_deliverables", {
   id: text("id").primaryKey(),
@@ -347,6 +416,10 @@ export const customPresetsRelations = relations(customPresets, ({ one }) => ({
 
 export const photosRelations = relations(photos, ({ one, many }) => ({
   event: one(events, { fields: [photos.eventId], references: [events.id] }),
+  deliverable: one(eventDeliverables, {
+    fields: [photos.deliverableId],
+    references: [eventDeliverables.id],
+  }),
   selectionItems: many(selectionItems),
   annotations: many(photoAnnotations),
   reactions: many(photoReactions),
@@ -355,7 +428,10 @@ export const photosRelations = relations(photos, ({ one, many }) => ({
 }));
 
 export const selectionsRelations = relations(selections, ({ one, many }) => ({
-  event: one(events, { fields: [selections.eventId], references: [events.id] }),
+  deliverable: one(eventDeliverables, {
+    fields: [selections.deliverableId],
+    references: [eventDeliverables.id],
+  }),
   items: many(selectionItems),
 }));
 
@@ -417,11 +493,17 @@ export const eventsRelations = relations(events, ({ many, one }) => ({
   photos: many(photos),
   customPresets: many(customPresets),
   feedback: many(feedback),
-  selection: one(selections, {
-    fields: [events.id],
-    references: [selections.eventId],
-  }),
+  deliverables: many(eventDeliverables),
   client: one(clients, { fields: [events.clientId], references: [clients.id] }),
+}));
+
+export const eventDeliverablesRelations = relations(eventDeliverables, ({ one, many }) => ({
+  event: one(events, { fields: [eventDeliverables.eventId], references: [events.id] }),
+  photos: many(photos),
+  selection: one(selections, {
+    fields: [eventDeliverables.id],
+    references: [selections.deliverableId],
+  }),
 }));
 
 export const feedbackRelations = relations(feedback, ({ one, many }) => ({

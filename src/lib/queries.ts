@@ -15,6 +15,7 @@ import {
   videoReviews,
   adminFeedback,
   clientDeliverables,
+  eventDeliverables,
   type Tier,
   type Preset,
   type PresetId,
@@ -22,6 +23,7 @@ import {
   type FeedbackScoreSegment,
   type VideoReviewStatus,
   type RelationshipStage,
+  type DeliverableStatus,
 } from "@/db/schema";
 import { eq, and, asc, desc, isNull } from "drizzle-orm";
 import { generateId, generateSlug, generateVoucherCode } from "./ids";
@@ -59,10 +61,68 @@ export async function createEvent(input: {
     // a schema migration having already run against the database.
     enabledBuiltinPresets: JSON.stringify(presetEnum),
   });
-  if (input.tier === "select") {
-    await db.insert(selections).values({ id: generateId(), eventId: id });
-  }
+  // No selections row created here anymore — that's now owned by a
+  // deliverable (see createDeliverable below), since tier/quota (and
+  // therefore whether a select-tier selection exists) is per-deliverable,
+  // not per-event. POST /api/events creates the event's first
+  // deliverable right after calling this.
   return getEventBySlug(slug);
+}
+
+/**
+ * One named, independently-tiered gallery within an event (see
+ * eventDeliverables' doc comment in schema.ts). Mirrors what
+ * createEvent used to do for tier="select": also opens the matching
+ * selections row, since a select-tier deliverable is unusable without
+ * one.
+ */
+export async function createDeliverable(
+  eventId: string,
+  input: { name: string; tier: Tier; quota?: number; extraUnitNote?: string }
+) {
+  const id = generateId();
+  await db.insert(eventDeliverables).values({
+    id,
+    eventId,
+    name: input.name,
+    tier: input.tier,
+    quota: input.tier === "select" ? input.quota ?? 20 : 0,
+    ...(input.extraUnitNote !== undefined ? { extraUnitNote: input.extraUnitNote } : {}),
+  });
+  if (input.tier === "select") {
+    await db.insert(selections).values({ id: generateId(), deliverableId: id });
+  }
+  return getDeliverable(id);
+}
+
+export async function listEventDeliverables(eventId: string) {
+  return db.query.eventDeliverables.findMany({
+    where: eq(eventDeliverables.eventId, eventId),
+    orderBy: asc(eventDeliverables.createdAt),
+  });
+}
+
+export async function getDeliverable(id: string) {
+  const deliverable = await db.query.eventDeliverables.findFirst({
+    where: eq(eventDeliverables.id, id),
+  });
+  return deliverable ?? null;
+}
+
+export async function updateDeliverable(
+  id: string,
+  patch: Partial<{ name: string; tier: Tier; quota: number; status: DeliverableStatus }>
+) {
+  await db.update(eventDeliverables).set(patch).where(eq(eventDeliverables.id, id));
+}
+
+/** Cascades photos/selection/selectionItems via FK — same one-line
+ * pattern as deleteEvent. Caller is responsible for cleaning up this
+ * deliverable's storage objects first (storage keys are eventId-keyed,
+ * not deliverable-keyed, so that cleanup can't be a simple prefix
+ * delete — see the deliverables DELETE route). */
+export async function deleteDeliverable(id: string) {
+  await db.delete(eventDeliverables).where(eq(eventDeliverables.id, id));
 }
 
 export async function getEventBySlug(slug: string) {
@@ -87,6 +147,43 @@ export async function listEventPhotos(eventId: string) {
   });
 }
 
+/** Deliverable-scoped counterpart of listEventPhotos above — what the
+ * gallery actually renders per deliverable section/tab now. */
+export async function listDeliverablePhotos(deliverableId: string) {
+  return db.query.photos.findMany({
+    where: and(
+      eq(photos.deliverableId, deliverableId),
+      eq(photos.status, "live"),
+      eq(photos.kind, "photo")
+    ),
+    orderBy: desc(photos.uploadedAt),
+  });
+}
+
+/** Deliverable-scoped counterpart of listEventVideos below. */
+export async function listDeliverableVideos(deliverableId: string) {
+  return db.query.photos.findMany({
+    where: and(
+      eq(photos.deliverableId, deliverableId),
+      eq(photos.status, "live"),
+      eq(photos.kind, "video")
+    ),
+    orderBy: desc(photos.uploadedAt),
+  });
+}
+
+/** Every photo/video row for a deliverable regardless of status or
+ * kind — unlike listDeliverablePhotos/listDeliverableVideos (live +
+ * one kind only, for gallery display), this is for deleting a
+ * deliverable: storage keys are eventId-prefixed, not
+ * deliverable-prefixed (see photos.deliverableId's schema comment),
+ * so there's no folder-prefix shortcut — every one of this
+ * deliverable's photo rows (queued/failed included) has to be found
+ * and its individual storage objects removed one by one. */
+export async function listAllDeliverablePhotos(deliverableId: string) {
+  return db.query.photos.findMany({ where: eq(photos.deliverableId, deliverableId) });
+}
+
 export async function getPhoto(photoId: string) {
   return db.query.photos.findFirst({ where: eq(photos.id, photoId) });
 }
@@ -109,9 +206,22 @@ export async function getPhotoWithEventClientId(photoId: string) {
   return photo ?? null;
 }
 
-export async function createQueuedPhoto(eventId: string, preset: PresetId, kind: PhotoKind = "photo") {
+export async function createQueuedPhoto(
+  eventId: string,
+  deliverableId: string,
+  preset: PresetId,
+  kind: PhotoKind = "photo"
+) {
+  // Postgres can't express "deliverableId's own eventId must match the
+  // eventId also being written here" as a constraint (photos denormalizes
+  // both — see schema.ts's comment on photos.deliverableId) — enforced
+  // here instead, once, for every caller.
+  const deliverable = await getDeliverable(deliverableId);
+  if (!deliverable || deliverable.eventId !== eventId) {
+    throw new Error(`Deliverable '${deliverableId}' does not belong to event '${eventId}'.`);
+  }
   const id = generateId();
-  await db.insert(photos).values({ id, eventId, preset, kind, status: "queued" });
+  await db.insert(photos).values({ id, eventId, deliverableId, preset, kind, status: "queued" });
   return id;
 }
 
@@ -180,19 +290,19 @@ export async function markPhotoFailed(photoId: string) {
   await db.update(photos).set({ status: "failed" }).where(eq(photos.id, photoId));
 }
 
-export async function getSelectionForEvent(eventId: string) {
+export async function getSelectionForDeliverable(deliverableId: string) {
   const selection = await db.query.selections.findFirst({
-    where: eq(selections.eventId, eventId),
+    where: eq(selections.deliverableId, deliverableId),
     with: { items: true },
   });
   return selection ?? null;
 }
 
-export async function toggleSelectionItem(eventId: string, photoId: string) {
+export async function toggleSelectionItem(deliverableId: string, photoId: string) {
   const selection = await db.query.selections.findFirst({
-    where: eq(selections.eventId, eventId),
+    where: eq(selections.deliverableId, deliverableId),
   });
-  if (!selection) throw new Error("This event has no selection (not a select-tier event).");
+  if (!selection) throw new Error("This deliverable has no selection (not a select-tier deliverable).");
   if (selection.finalizedAt) throw new Error("Selection is already finalized.");
 
   const existing = await db.query.selectionItems.findFirst({
@@ -213,11 +323,11 @@ export async function toggleSelectionItem(eventId: string, photoId: string) {
   }
 }
 
-export async function finalizeSelection(eventId: string) {
+export async function finalizeSelection(deliverableId: string) {
   const selection = await db.query.selections.findFirst({
-    where: eq(selections.eventId, eventId),
+    where: eq(selections.deliverableId, deliverableId),
   });
-  if (!selection) throw new Error("This event has no selection (not a select-tier event).");
+  if (!selection) throw new Error("This deliverable has no selection (not a select-tier deliverable).");
   await db
     .update(selections)
     .set({ finalizedAt: new Date().toISOString() })
@@ -443,15 +553,6 @@ async function replaceClientDeliverables(clientId: string, deliverables: OpsDeli
   );
 }
 
-/** Ordered by project first so callers can group consecutive rows
- * without a second pass, then by insertion order within a project. */
-export async function listClientDeliverables(clientId: string) {
-  return db.query.clientDeliverables.findMany({
-    where: eq(clientDeliverables.clientId, clientId),
-    orderBy: [asc(clientDeliverables.project), asc(clientDeliverables.createdAt)],
-  });
-}
-
 /**
  * The fotofoto-ops-driven provisioning path — see POST
  * /api/ops/clients. `opsClientId` is the idempotency key: a repeat
@@ -519,6 +620,32 @@ export async function listClientEvents(clientId: string) {
     where: eq(events.clientId, clientId),
     orderBy: desc(events.createdAt),
   });
+}
+
+/** Real deliverables (see eventDeliverables in schema.ts) across every
+ * event linked to this client — what /library's Deliverables section
+ * renders now, replacing the old ops-pushed free-text
+ * listClientDeliverables above. Grouped by event, newest event first,
+ * so the client's own view can section them the same way the old
+ * ops-driven list grouped by "project". */
+export async function listEventDeliverablesForClient(clientId: string) {
+  const rows = await db.query.events.findMany({
+    where: eq(events.clientId, clientId),
+    orderBy: desc(events.createdAt),
+    with: { deliverables: { orderBy: asc(eventDeliverables.createdAt) } },
+  });
+  return rows.map((e) => ({
+    eventId: e.id,
+    eventSlug: e.slug,
+    eventName: e.name,
+    deliverables: e.deliverables.map((d) => ({
+      id: d.id,
+      name: d.name,
+      tier: d.tier,
+      quota: d.quota,
+      status: d.status,
+    })),
+  }));
 }
 
 // Matches design-reference/Main.dc.html's "Archives after 2 weeks"

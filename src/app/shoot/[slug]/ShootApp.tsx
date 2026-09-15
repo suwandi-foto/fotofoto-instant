@@ -8,18 +8,22 @@ import { Logo } from "@/app/Logo";
 
 type PresetOption = { id: string; name: string; swatch: string; swatchType: "gradient" | "image" };
 type SamplePreview = { id: string; name: string; previewDataUrl: string };
+type DeliverableOption = { id: string; name: string; tier: "full_access" | "select"; quota: number };
 
 export function ShootApp({
   slug,
   eventName,
   initialPresets,
+  deliverables,
 }: {
   slug: string;
   eventName: string;
   initialPresets: PresetOption[];
+  deliverables: DeliverableOption[];
 }) {
   const [presets] = useState<PresetOption[]>(initialPresets);
   const [preset, setPreset] = useState<string>(initialPresets[0]?.id ?? "warm");
+  const [deliverableId, setDeliverableId] = useState<string>(deliverables[0]?.id ?? "");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [liveCount, setLiveCount] = useState<number | null>(null);
   const [isOnline, setIsOnline] = useState(true);
@@ -36,8 +40,14 @@ export function ShootApp({
   }, []);
 
   const refreshLiveCount = useCallback(async () => {
-    const res = await fetch(`/api/events/${slug}/photos`, { cache: "no-store" });
-    if (res.ok) setLiveCount((await res.json()).photos.length);
+    const res = await fetch(`/api/events/${slug}/gallery`, { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const count = (data.deliverables as { photos: unknown[]; videos: unknown[] }[]).reduce(
+      (sum, d) => sum + d.photos.length + d.videos.length,
+      0
+    );
+    setLiveCount(count);
   }, [slug]);
 
   const runDrain = useCallback(async () => {
@@ -72,6 +82,10 @@ export function ShootApp({
 
   async function onFilesSelected(files: FileList | null) {
     if (!files || files.length === 0) return;
+    if (!deliverableId) {
+      console.warn("No deliverable selected — ask staff to add one for this event first.");
+      return;
+    }
     for (const file of Array.from(files)) {
       // A cancelled/failed camera capture can hand back a 0-byte
       // file (seen with some browsers' camera-capture flow) — skip
@@ -84,6 +98,7 @@ export function ShootApp({
       await enqueue({
         id: generateId(),
         eventSlug: slug,
+        deliverableId,
         preset,
         blob: file,
         fileName: file.name,
@@ -149,6 +164,36 @@ export function ShootApp({
             Ready to capture
           </div>
         </div>
+      </div>
+
+      {/* Deliverable picker */}
+      <div className="flex flex-col gap-2.5 px-5 pb-1 pt-4">
+        <div className="text-xs font-bold uppercase tracking-wide text-text-dim">Uploading to</div>
+        {deliverables.length === 0 ? (
+          <p className="text-sm text-red-400">
+            This event has no deliverables yet — ask staff to add one before shooting.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {deliverables.map((d) => {
+              const active = deliverableId === d.id;
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => setDeliverableId(d.id)}
+                  className={`rounded-lg border px-3 py-1.5 text-left ${
+                    active ? "border-gold bg-gold/10" : "border-border bg-panel"
+                  }`}
+                >
+                  <div className={`text-sm font-bold ${active ? "text-gold" : "text-text"}`}>{d.name}</div>
+                  <div className="text-[10.5px] text-text-dim-2">
+                    {d.tier === "select" ? `Select · quota ${d.quota}` : "Full access"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Preset picker */}
@@ -260,7 +305,8 @@ export function ShootApp({
         <div className="grid grid-cols-2 gap-2.5">
           <button
             onClick={() => cameraInputRef.current?.click()}
-            className="flex flex-col items-center gap-1.5 rounded-md border-2 border-dashed border-border py-5 text-center text-sm font-semibold text-text-dim hover:border-gold hover:text-gold"
+            disabled={deliverables.length === 0}
+            className="flex flex-col items-center gap-1.5 rounded-md border-2 border-dashed border-border py-5 text-center text-sm font-semibold text-text-dim hover:border-gold hover:text-gold disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-dim"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2Z" />
@@ -270,7 +316,8 @@ export function ShootApp({
           </button>
           <button
             onClick={() => libraryInputRef.current?.click()}
-            className="flex flex-col items-center gap-1.5 rounded-md border-2 border-dashed border-border py-5 text-center text-sm font-semibold text-text-dim hover:border-gold hover:text-gold"
+            disabled={deliverables.length === 0}
+            className="flex flex-col items-center gap-1.5 rounded-md border-2 border-dashed border-border py-5 text-center text-sm font-semibold text-text-dim hover:border-gold hover:text-gold disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-dim"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 3v13" />

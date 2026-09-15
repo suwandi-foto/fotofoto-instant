@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEventBySlug, getCustomPreset } from "@/lib/queries";
+import { getEventBySlug, getCustomPreset, getDeliverable } from "@/lib/queries";
 import { createResumableUploadSession, rawUploadKey } from "@/lib/storage";
 import { presetEnum } from "@/db/schema";
 import { parseCustomPresetRef } from "@/lib/presetMeta";
@@ -29,7 +29,13 @@ export async function POST(
 
   const body = await req.json().catch(() => null);
   const presetRaw = typeof body?.preset === "string" ? body.preset : "";
+  const deliverableId = typeof body?.deliverableId === "string" ? body.deliverableId : "";
   const contentType = typeof body?.contentType === "string" && body.contentType ? body.contentType : "image/jpeg";
+
+  const deliverable = deliverableId ? await getDeliverable(deliverableId) : null;
+  if (!deliverable || deliverable.eventId !== event.id) {
+    return NextResponse.json({ error: "Missing/invalid 'deliverableId' field." }, { status: 400 });
+  }
 
   // Presets are a photo-only concept (color grading) — a video upload
   // skips this validation entirely rather than being forced to supply

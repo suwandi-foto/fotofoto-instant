@@ -1,4 +1,4 @@
-import { getEventBySlug, getSelectionForEvent } from "@/lib/queries";
+import { getEventBySlug, getDeliverable, getSelectionForDeliverable } from "@/lib/queries";
 import { db } from "@/db/client";
 import { photos as photosTable } from "@/db/schema";
 import { inArray } from "drizzle-orm";
@@ -11,14 +11,17 @@ export const dynamic = "force-dynamic";
 export default async function FinalizePage({
   params,
 }: {
-  params: Promise<{ slug: string }>;
+  params: Promise<{ slug: string; deliverableId: string }>;
 }) {
-  const { slug } = await params;
+  const { slug, deliverableId } = await params;
   const event = await getEventBySlug(slug);
   if (!event) notFound();
-  if (event.tier !== "select") redirect(`/e/${slug}`);
 
-  const selection = await getSelectionForEvent(event.id);
+  const deliverable = await getDeliverable(deliverableId);
+  if (!deliverable || deliverable.eventId !== event.id) notFound();
+  if (deliverable.tier !== "select") redirect(`/e/${slug}`);
+
+  const selection = await getSelectionForDeliverable(deliverable.id);
   if (!selection || !selection.finalizedAt) redirect(`/e/${slug}`);
 
   const selectedIds = selection.items.map((i) => i.photoId);
@@ -27,8 +30,8 @@ export default async function FinalizePage({
     : [];
 
   const total = selectedPhotos.length;
-  const included = Math.min(total, event.quota);
-  const extra = Math.max(0, total - event.quota);
+  const included = Math.min(total, deliverable.quota);
+  const extra = Math.max(0, total - deliverable.quota);
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col">
@@ -44,7 +47,9 @@ export default async function FinalizePage({
           </div>
           <div>
             <div className="font-display text-lg font-semibold leading-tight">Selection finalized</div>
-            <div className="text-sm text-text-dim">{event.name}</div>
+            <div className="text-sm text-text-dim">
+              {event.name} &middot; {deliverable.name}
+            </div>
           </div>
         </div>
       </div>
@@ -53,7 +58,7 @@ export default async function FinalizePage({
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-dim">Included in package</span>
           <span className="font-display font-bold">
-            {included} / {event.quota}
+            {included} / {deliverable.quota}
           </span>
         </div>
         <div className="h-px bg-border" />
@@ -61,7 +66,7 @@ export default async function FinalizePage({
           <span className="text-sm text-text-dim">Extra photos selected</span>
           <span className="font-display font-bold text-gold">+{extra}</span>
         </div>
-        {extra > 0 && <p className="text-xs text-text-dim-2">{event.extraUnitNote}</p>}
+        {extra > 0 && <p className="text-xs text-text-dim-2">{deliverable.extraUnitNote}</p>}
       </div>
 
       <div className="flex flex-col gap-2.5 px-5">
@@ -91,7 +96,7 @@ export default async function FinalizePage({
       <div className="flex-1" />
       <div className="px-5 pb-8">
         <a
-          href={`/api/events/${slug}/download-all`}
+          href={`/api/events/${slug}/deliverables/${deliverable.id}/download-all`}
           className="flex items-center justify-center gap-2 rounded-md bg-gold px-4 py-3.5 text-center font-bold text-gold-ink hover:opacity-90"
         >
           Download my {total} photos

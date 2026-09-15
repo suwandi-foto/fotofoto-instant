@@ -2,6 +2,7 @@ import { getEventBySlug } from "@/lib/queries";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { PresetsManager } from "./PresetsManager";
+import { DeliverablesManager } from "./DeliverablesManager";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +23,15 @@ export default async function EventControlPage({
         </Link>
         <h1 className="font-display mt-3 text-2xl font-semibold">{event.name}</h1>
         <p className="mt-1 text-sm text-text-dim">
-          Editing presets for this event — what the photographer app offers, and any custom looks
-          you&apos;ve uploaded.
+          Manage this event&apos;s deliverables, editing presets, and any custom looks you&apos;ve
+          uploaded.
         </p>
       </div>
 
-      <PresetsManager slug={event.slug} />
+      <div className="flex flex-col gap-8">
+        <DeliverablesManager slug={event.slug} />
+        <PresetsManager slug={event.slug} />
+      </div>
     </main>
   );
 }

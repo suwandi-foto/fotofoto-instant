@@ -43,8 +43,12 @@ const Body = z.object({
   companyName: z.string().min(1),
   accessCode: z.string().min(1),
   relationshipStage: z.enum(relationshipStageEnum).optional(),
-  // Optional so older, already-deployed ops builds that don't send this
-  // field yet keep working — treated the same as an explicit [].
+  // SUPERSEDED by eventDeliverables (see schema.ts) — still accepted
+  // and stored here for backward compatibility with ops's existing
+  // push, but nothing in this app renders it anymore (/library reads
+  // real deliverables instead). Optional so older, already-deployed
+  // ops builds that don't send this field yet keep working — treated
+  // the same as an explicit [].
   deliverables: z.array(Deliverable).optional(),
 });
 

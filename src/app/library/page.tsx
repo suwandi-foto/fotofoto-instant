@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { Logo } from "@/app/Logo";
 import { getCurrentClient } from "@/lib/session";
-import { listClientEvents, getClientById, isEventArchived, listClientDeliverables } from "@/lib/queries";
+import { listClientEvents, getClientById, isEventArchived, listEventDeliverablesForClient } from "@/lib/queries";
 import { LogoutButton } from "./LogoutButton";
 import { EventLibrary } from "./EventLibrary";
 import { CommunicationHealthCard, FeedbackCard } from "./EntryCards";
@@ -38,10 +38,10 @@ export default async function LibraryPage({
     redirect("/login");
   }
 
-  const [client, events, deliverables] = await Promise.all([
+  const [client, events, deliverableGroups] = await Promise.all([
     getClientById(session.clientId),
     listClientEvents(session.clientId),
-    listClientDeliverables(session.clientId),
+    listEventDeliverablesForClient(session.clientId),
   ]);
 
   const eventRows = events.map((e) => ({
@@ -76,7 +76,7 @@ export default async function LibraryPage({
       </div>
 
       <div className="mb-8">
-        <DeliverablesSection deliverables={deliverables} />
+        <DeliverablesSection events={deliverableGroups} />
       </div>
 
       <div className="flex flex-col gap-2.5">

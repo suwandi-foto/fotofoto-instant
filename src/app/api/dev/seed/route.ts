@@ -6,6 +6,7 @@ import { events, photos } from "@/db/schema";
 import {
   createClient,
   createEvent,
+  createDeliverable,
   createQueuedPhoto,
   markPhotoLive,
   createPhotoAnnotation,
@@ -70,13 +71,13 @@ async function placeholderRaw(label: string, w: number, h: number, color: { r: n
   return sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toBuffer();
 }
 
-async function seedLivePhoto(eventId: string, index: number, label: string) {
+async function seedLivePhoto(eventId: string, deliverableId: string, index: number, label: string) {
   const size = ORIENTATIONS[index % ORIENTATIONS.length];
   const color = PALETTE[index % PALETTE.length];
   const raw = await placeholderRaw(label, size.w, size.h, color);
   const processed = await processCapturedPhoto(raw, { kind: "builtin", id: "original" }, false);
 
-  const photoId = await createQueuedPhoto(eventId, "original");
+  const photoId = await createQueuedPhoto(eventId, deliverableId, "original");
   const oKey = originalKey(eventId, photoId);
   const pKey = previewKey(eventId, photoId);
   await putObject(oKey, processed.original);
@@ -112,10 +113,11 @@ export async function POST(req: Request) {
     tier: "full_access",
   });
   await db.update(events).set({ clientId: client!.id }).where(eq(events.id, eventA!.id));
+  const deliverableA = await createDeliverable(eventA!.id, { name: "All Photos", tier: "full_access" });
 
   const eventAPhotoIds: string[] = [];
   for (let i = 0; i < 9; i++) {
-    eventAPhotoIds.push(await seedLivePhoto(eventA!.id, i, `Gala ${i + 1}`));
+    eventAPhotoIds.push(await seedLivePhoto(eventA!.id, deliverableA!.id, i, `Gala ${i + 1}`));
   }
 
   await createPhotoAnnotation({
@@ -141,6 +143,7 @@ export async function POST(req: Request) {
   await db.insert(photos).values({
     id: videoId,
     eventId: eventA!.id,
+    deliverableId: deliverableA!.id,
     kind: "video",
     preset: "original",
     status: "live",
@@ -185,13 +188,14 @@ export async function POST(req: Request) {
     quota: 15,
   });
   await db.update(events).set({ clientId: client!.id }).where(eq(events.id, eventB!.id));
+  const deliverableB = await createDeliverable(eventB!.id, { name: "All Photos", tier: "select", quota: 15 });
 
   const eventBPhotoIds: string[] = [];
   for (let i = 0; i < 10; i++) {
-    eventBPhotoIds.push(await seedLivePhoto(eventB!.id, i, `Launch ${i + 1}`));
+    eventBPhotoIds.push(await seedLivePhoto(eventB!.id, deliverableB!.id, i, `Launch ${i + 1}`));
   }
   for (const photoId of eventBPhotoIds.slice(0, 4)) {
-    await toggleSelectionItem(eventB!.id, photoId);
+    await toggleSelectionItem(deliverableB!.id, photoId);
   }
 
   return NextResponse.json({

@@ -19,9 +19,6 @@ export default async function EventGalleryPage({
       initialEvent={{
         name: event.name,
         clientName: event.clientName,
-        tier: event.tier,
-        quota: event.quota,
-        extraUnitNote: event.extraUnitNote,
       }}
     />
   );

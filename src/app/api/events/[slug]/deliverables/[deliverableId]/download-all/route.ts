@@ -1,29 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ZipArchive } from "archiver";
 import { PassThrough, Readable } from "node:stream";
-import { getEventBySlug, listEventPhotos, getSelectionForEvent } from "@/lib/queries";
+import {
+  getEventBySlug,
+  getDeliverable,
+  listDeliverablePhotos,
+  getSelectionForDeliverable,
+} from "@/lib/queries";
 import { getObject } from "@/lib/storage";
 
 /**
  * "Download All" — server-side zip, streamed as it's built rather
- * than assembled in memory first. Flagged in the brief as an
- * implementation detail worth revisiting (a queue-based background
- * zip job would scale better for very large events); this streaming
- * approach is a reasonable, real starting point for v1.
+ * than assembled in memory first. Scoped to one deliverable, not the
+ * whole event: once a full-access "Normal Edit" and a select-tier
+ * "HQ Edit" can coexist in the same event, there's no single
+ * event-wide "download all" gate that makes sense anymore — each
+ * deliverable has its own.
  */
 export async function GET(
   _req: NextRequest,
-  { params }: { params: Promise<{ slug: string }> }
+  { params }: { params: Promise<{ slug: string; deliverableId: string }> }
 ) {
-  const { slug } = await params;
+  const { slug, deliverableId } = await params;
   const event = await getEventBySlug(slug);
   if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
 
-  const allPhotos = await listEventPhotos(event.id);
+  const deliverable = await getDeliverable(deliverableId);
+  if (!deliverable || deliverable.eventId !== event.id) {
+    return NextResponse.json({ error: "Deliverable not found" }, { status: 404 });
+  }
+
+  const allPhotos = await listDeliverablePhotos(deliverable.id);
 
   let downloadable = allPhotos;
-  if (event.tier === "select") {
-    const selection = await getSelectionForEvent(event.id);
+  if (deliverable.tier === "select") {
+    const selection = await getSelectionForDeliverable(deliverable.id);
     if (!selection?.finalizedAt) {
       return NextResponse.json(
         { error: "Downloads unlock only after the selection is finalized." },
@@ -54,10 +65,14 @@ export async function GET(
     stream.destroy(err as Error);
   });
 
+  // deliverable.name is free-text staff input — strip it down to a
+  // filename-safe slug before it goes anywhere near a header value.
+  const safeName = deliverable.name.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "deliverable";
+
   return new NextResponse(Readable.toWeb(stream) as unknown as ReadableStream, {
     headers: {
       "Content-Type": "application/zip",
-      "Content-Disposition": `attachment; filename="fotofoto-${event.slug}.zip"`,
+      "Content-Disposition": `attachment; filename="fotofoto-${event.slug}-${safeName}.zip"`,
       "Cache-Control": "private, no-store",
     },
   });

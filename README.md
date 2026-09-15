@@ -60,6 +60,37 @@ Open `/` — that's a small control-room page for creating test events
 (no real booking system exists yet, this stands in for it) and getting
 links to each event's gallery, QR code, and photographer app.
 
+### Deploying the deliverables feature to an existing (non-empty) database
+
+There are no migration files in this repo — `drizzle-kit push` diffs
+`src/db/schema.ts` directly against the live database. That's fine for
+a fresh database, but the deliverables feature (one event containing
+several independently-tiered galleries — see `eventDeliverables` in
+schema.ts) changes columns that already hold real production data
+(`photos.eventId`, `selections.eventId`), so rolling it out to an
+existing database needs three steps, strictly in order, against a real
+network-reachable `DATABASE_URL` (not from a sandboxed dev
+environment without outbound DB access):
+
+1. `npx drizzle-kit push` — additive only at this point: the new
+   `event_deliverables` table, plus nullable
+   `photos.deliverable_id` / `selections.deliverable_id` columns.
+   Existing app code is unaffected (it doesn't reference these yet).
+2. `DATABASE_URL=... node scripts/backfill-deliverables.mjs` —
+   one-time backfill: gives every pre-existing event a default "All
+   Photos" deliverable and reassigns its photos/selection to it.
+   Idempotent and safe to re-run; it reports at the end whether every
+   row is migrated.
+3. Only once step 2 reports a clean 0/0 gap: flip
+   `photos.deliverableId` to `.notNull()`, flip
+   `selections.deliverableId` to `.notNull().unique()`, drop
+   `selections.eventId` and its stray `.references(...)`, then
+   `npx drizzle-kit push` again.
+
+Deploy the app code that assumes every photo has a `deliverableId`
+(the upload/gallery/selection routes) only after step 2 is confirmed
+complete — it 400s/404s against any row still missing one.
+
 ## How the pieces fit together
 
 - **`src/db/schema.ts`** — the data model: `events` (one QR/link, one

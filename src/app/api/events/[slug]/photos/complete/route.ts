@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import {
   getEventBySlug,
+  getDeliverable,
   createQueuedPhoto,
   markPhotoLive,
   markPhotoProcessing,
@@ -19,10 +20,11 @@ import {
   videoPreviewKey,
   videoThumbnailKey,
 } from "@/lib/storage";
-import { presetEnum, events } from "@/db/schema";
+import { presetEnum, events, eventDeliverables } from "@/db/schema";
 import { parseCustomPresetRef } from "@/lib/presetMeta";
 
 type Event = typeof events.$inferSelect;
+type Deliverable = typeof eventDeliverables.$inferSelect;
 
 async function resolvePresetSpec(
   eventId: string,
@@ -44,13 +46,13 @@ async function resolvePresetSpec(
   return { spec: { kind: "builtin", id: builtin } };
 }
 
-async function completePhoto(event: Event, rawKey: string, presetRaw: string) {
+async function completePhoto(event: Event, deliverable: Deliverable, rawKey: string, presetRaw: string) {
   const resolved = await resolvePresetSpec(event.id, presetRaw);
   if ("error" in resolved) {
     return NextResponse.json({ error: resolved.error }, { status: 400 });
   }
 
-  const photoId = await createQueuedPhoto(event.id, presetRaw);
+  const photoId = await createQueuedPhoto(event.id, deliverable.id, presetRaw);
 
   try {
     const raw = await getObject(rawKey);
@@ -62,7 +64,9 @@ async function completePhoto(event: Event, rawKey: string, presetRaw: string) {
       );
     }
 
-    const watermark = event.tier === "select";
+    // Per-deliverable now, not per-event — a full_access "Normal Edit"
+    // and a select-tier "HQ Edit" can coexist in the same event.
+    const watermark = deliverable.tier === "select";
     const processed = await processCapturedPhoto(raw, resolved.spec, watermark);
 
     const oKey = originalKey(event.id, photoId);
@@ -112,7 +116,7 @@ async function completePhoto(event: Event, rawKey: string, presetRaw: string) {
  * completion after the response is sent, unlike a serverless function
  * that would need Vercel's after()-keeps-alive guarantee instead.
  */
-async function completeVideo(event: Event, rawKey: string) {
+async function completeVideo(event: Event, deliverable: Deliverable, rawKey: string) {
   // Loaded dynamically, and only here, so a plain photo upload (the
   // vastly more common case — see completePhoto above) never pays the
   // cost of loading @ffmpeg-installer/ffmpeg, and a host where that
@@ -120,7 +124,7 @@ async function completeVideo(event: Event, rawKey: string) {
   // upload — see videoContentType.ts's doc comment for the incident
   // that prompted this.
   const { extractVideoMeta, transcodeVideoPreview } = await import("@/lib/video");
-  const photoId = await createQueuedPhoto(event.id, "original", "video");
+  const photoId = await createQueuedPhoto(event.id, deliverable.id, "original", "video");
 
   try {
     const raw = await getObject(rawKey);
@@ -153,7 +157,7 @@ async function completeVideo(event: Event, rawKey: string) {
 
     after(async () => {
       try {
-        const watermark = event.tier === "select";
+        const watermark = deliverable.tier === "select";
         const preview = await transcodeVideoPreview(raw, meta, watermark);
         const pKey = videoPreviewKey(event.id, photoId);
         await putObject(pKey, preview);
@@ -210,10 +214,16 @@ export async function POST(
   const presetRaw = typeof body?.preset === "string" ? body.preset : "";
   const rawKey = typeof body?.rawKey === "string" ? body.rawKey : "";
   const contentType = typeof body?.contentType === "string" ? body.contentType : "";
+  const deliverableId = typeof body?.deliverableId === "string" ? body.deliverableId : "";
   if (!rawKey) return NextResponse.json({ error: "Missing 'rawKey' field" }, { status: 400 });
 
-  if (isVideoContentType(contentType)) {
-    return completeVideo(event, rawKey);
+  const deliverable = deliverableId ? await getDeliverable(deliverableId) : null;
+  if (!deliverable || deliverable.eventId !== event.id) {
+    return NextResponse.json({ error: "Missing/invalid 'deliverableId' field." }, { status: 400 });
   }
-  return completePhoto(event, rawKey, presetRaw);
+
+  if (isVideoContentType(contentType)) {
+    return completeVideo(event, deliverable, rawKey);
+  }
+  return completePhoto(event, deliverable, rawKey, presetRaw);
 }

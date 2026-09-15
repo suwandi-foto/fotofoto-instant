@@ -17,6 +17,7 @@ export type QueueItemStatus = "queued" | "uploading" | "done" | "failed" | "stuc
 export type QueueItem = {
   id: string;
   eventSlug: string;
+  deliverableId: string;
   preset: string;
   blob: Blob;
   fileName: string;
@@ -316,7 +317,7 @@ async function drainQueueOnce(onChange?: () => void): Promise<void> {
       const { uploadUrl, rawKey } = (await postJson(
         "starting upload",
         `/api/events/${item.eventSlug}/photos/init`,
-        { preset: item.preset, contentType },
+        { preset: item.preset, deliverableId: item.deliverableId, contentType },
         controller.signal
       )) as { uploadUrl: string; rawKey: string };
 
@@ -343,7 +344,7 @@ async function drainQueueOnce(onChange?: () => void): Promise<void> {
       await postJson(
         "finishing upload",
         `/api/events/${item.eventSlug}/photos/complete`,
-        { preset: item.preset, rawKey, contentType },
+        { preset: item.preset, deliverableId: item.deliverableId, rawKey, contentType },
         controller.signal
       );
 

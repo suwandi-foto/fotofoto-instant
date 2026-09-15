@@ -5,7 +5,7 @@ import Link from "next/link";
 import { NewEventForm } from "./NewEventForm";
 import { DeleteEventButton } from "./DeleteEventButton";
 import { Logo } from "./Logo";
-import { listClients } from "@/lib/queries";
+import { listClients, listEventDeliverables } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,11 @@ export default async function Home() {
     listClients(),
   ]);
   const clientNameById = new Map(clients.map((c) => [c.id, c.companyName]));
+  const deliverablesByEvent = new Map(
+    await Promise.all(
+      events.map(async (e) => [e.id, await listEventDeliverables(e.id)] as const)
+    )
+  );
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-14">
@@ -49,7 +54,15 @@ export default async function Home() {
                   <div className="text-sm text-text-dim">
                     {e.clientName} &middot;{" "}
                     <span className="text-gold">
-                      {e.tier === "full_access" ? "Full access" : `Select (quota ${e.quota})`}
+                      {(() => {
+                        const deliverables = deliverablesByEvent.get(e.id) ?? [];
+                        if (deliverables.length === 0) return "No deliverables yet";
+                        if (deliverables.length === 1) {
+                          const d = deliverables[0];
+                          return d.tier === "full_access" ? "Full access" : `Select (quota ${d.quota})`;
+                        }
+                        return `${deliverables.length} deliverables`;
+                      })()}
                     </span>
                   </div>
                   <div className="mt-0.5 text-xs text-text-dim-2">
@@ -83,7 +96,7 @@ export default async function Home() {
                     href={`/control/${e.slug}`}
                     className="rounded-lg border border-border px-3 py-1.5 hover:border-gold"
                   >
-                    Presets
+                    Manage
                   </Link>
                   <DeleteEventButton slug={e.slug} eventName={e.name} />
                 </div>

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createEvent, getClientById } from "@/lib/queries";
+import { createEvent, createDeliverable, getClientById } from "@/lib/queries";
 
 // Stands in for the booking flow the FOTOFOTO team would use — creates
-// one Event (one QR/link, one tier), matching the confirmed model.
+// one Event (one QR/link) plus its first deliverable (one tier/quota),
+// matching the confirmed model. Staff add more deliverables afterward
+// from /control/[slug] if this event turns out to need separate
+// galleries (e.g. a later-added "HQ Edit" alongside this first one).
 const CreateEventSchema = z.object({
   name: z.string().min(1),
   clientName: z.string().min(1),
@@ -25,6 +28,8 @@ export async function POST(req: NextRequest) {
   if (parsed.data.clientId && !(await getClientById(parsed.data.clientId))) {
     return NextResponse.json({ error: "No client with that id." }, { status: 400 });
   }
-  const event = await createEvent(parsed.data);
+  const { name, clientName, tier, quota, clientId } = parsed.data;
+  const event = await createEvent({ name, clientName, tier, quota, clientId });
+  await createDeliverable(event!.id, { name: "All Photos", tier, quota });
   return NextResponse.json({ event }, { status: 201 });
 }

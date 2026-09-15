@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPhoto } from "@/lib/queries";
 import { getObject } from "@/lib/storage";
 import { db } from "@/db/client";
-import { events, selections, selectionItems } from "@/db/schema";
+import { eventDeliverables, selections, selectionItems } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
 /**
@@ -18,16 +18,18 @@ export async function GET(
 ) {
   const { id } = await params;
   const photo = await getPhoto(id);
-  if (!photo || !photo.originalPath) {
+  if (!photo || !photo.originalPath || !photo.deliverableId) {
     return NextResponse.json({ error: "Photo not available" }, { status: 404 });
   }
 
-  const event = await db.query.events.findFirst({ where: eq(events.id, photo.eventId) });
-  if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
+  const deliverable = await db.query.eventDeliverables.findFirst({
+    where: eq(eventDeliverables.id, photo.deliverableId),
+  });
+  if (!deliverable) return NextResponse.json({ error: "Deliverable not found" }, { status: 404 });
 
-  if (event.tier === "select") {
+  if (deliverable.tier === "select") {
     const selection = await db.query.selections.findFirst({
-      where: eq(selections.eventId, event.id),
+      where: eq(selections.deliverableId, deliverable.id),
     });
     const isFinalized = Boolean(selection?.finalizedAt);
     const isSelected = selection
