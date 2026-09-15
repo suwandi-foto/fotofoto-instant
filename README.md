@@ -70,22 +70,39 @@ schema.ts) changes columns that already hold real production data
 (`photos.eventId`, `selections.eventId`), so rolling it out to an
 existing database needs three steps, strictly in order, against a real
 network-reachable `DATABASE_URL` (not from a sandboxed dev
-environment without outbound DB access):
+environment without outbound DB access).
 
-1. `npx drizzle-kit push` — additive only at this point: the new
-   `event_deliverables` table, plus nullable
-   `photos.deliverable_id` / `selections.deliverable_id` columns.
-   Existing app code is unaffected (it doesn't reference these yet).
-2. `DATABASE_URL=... node scripts/backfill-deliverables.mjs` —
+`drizzle-kit push` itself turned out to fail silently against this
+project's database (hangs at "Pulling schema from database..." and
+exits non-zero, no error text) — a known rough edge with its
+raw-Postgres-protocol `pg` driver, unrelated to network reachability
+(confirmed: raw TCP to the DB host works fine). `scripts/push-deliverables-schema.mjs`
+and `scripts/tighten-deliverables-schema.mjs` apply the identical
+schema changes by hand instead, over the same HTTPS-based driver
+`src/db/client.ts` already uses successfully at runtime. Both, like
+`dev`/`start` above, need the `NODE_OPTIONS` IPv4 flags — without them
+`@neondatabase/serverless`'s `fetch()` calls can hang and time out the
+same way plain `node` would against `next dev`/`next start`.
+
+1. `NODE_OPTIONS="--no-network-family-autoselection --dns-result-order=ipv4first" \
+   DATABASE_URL=... node scripts/push-deliverables-schema.mjs` —
+   additive only at this point: the new `event_deliverables` table,
+   plus nullable `photos.deliverable_id` / `selections.deliverable_id`
+   columns. Existing app code is unaffected (it doesn't reference
+   these yet). Idempotent — safe to re-run.
+2. `NODE_OPTIONS="--no-network-family-autoselection --dns-result-order=ipv4first" \
+   DATABASE_URL=... node scripts/backfill-deliverables.mjs` —
    one-time backfill: gives every pre-existing event a default "All
    Photos" deliverable and reassigns its photos/selection to it.
    Idempotent and safe to re-run; it reports at the end whether every
    row is migrated.
-3. Only once step 2 reports a clean 0/0 gap: flip
-   `photos.deliverableId` to `.notNull()`, flip
-   `selections.deliverableId` to `.notNull().unique()`, drop
-   `selections.eventId` and its stray `.references(...)`, then
-   `npx drizzle-kit push` again.
+3. Only once step 2 reports a clean 0/0 gap:
+   `NODE_OPTIONS="--no-network-family-autoselection --dns-result-order=ipv4first" \
+   DATABASE_URL=... node scripts/tighten-deliverables-schema.mjs` —
+   flips `photos.deliverableId` to `.notNull()`, flips
+   `selections.deliverableId` to `.notNull()` (already unique since
+   step 1), and drops `selections.eventId`. Re-checks the 0/0 gap
+   itself before touching anything, so it refuses to run early.
 
 Deploy the app code that assumes every photo has a `deliverableId`
 (the upload/gallery/selection routes) only after step 2 is confirmed

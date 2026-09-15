@@ -122,15 +122,9 @@ export const photos = pgTable("photos", {
   // checks — stays untouched. The app enforces deliverable.eventId ===
   // eventId at insert time (see createQueuedPhoto in queries.ts); Postgres
   // can't express that cross-table constraint directly.
-  //
-  // Nullable for now — MIGRATION IN PROGRESS, same 3-step rollout as
-  // `selections` above. Every new photo gets one from the moment the
-  // upload path (Phase 1) ships; existing rows are nullable until
-  // scripts/backfill-deliverables.mjs runs, after which a follow-up
-  // change tightens this to notNull.
-  deliverableId: text("deliverable_id").references(() => eventDeliverables.id, {
-    onDelete: "cascade",
-  }),
+  deliverableId: text("deliverable_id")
+    .notNull()
+    .references(() => eventDeliverables.id, { onDelete: "cascade" }),
   kind: text("kind", { enum: photoKindEnum }).notNull().default("photo"),
   preset: text("preset").notNull(), // a Preset id, or "custom:<customPresets.id>"
   status: text("status", { enum: photoStatusEnum }).notNull().default("queued"),
@@ -153,26 +147,12 @@ export const photos = pgTable("photos", {
 /**
  * One shared selection per select-tier deliverable (owned by the
  * client link holder, not per-guest — confirmed decision). Full-access
- * deliverables never have a selections row. `deliverableId` is
- * nullable-but-unique rather than notNull: Postgres allows any number
- * of NULLs under a unique constraint, so this already correctly
- * enforces "at most one selection per deliverable" for every row
- * created from here on, without needing every pre-existing row
- * populated first.
- *
- * MIGRATION IN PROGRESS: `eventId` used to be this table's anchor
- * (notNull + unique — one selection per *event*), which would have
- * blocked a second select-tier deliverable in the same event from
- * ever getting its own selections row. Relaxed to nullable/non-unique
- * and kept only so scripts/backfill-deliverables.mjs can read which
- * event a pre-existing (pre-deliverables) selection belonged to; drop
- * this column entirely once that script has run and been verified,
- * and tighten deliverableId to notNull at the same time.
+ * deliverables never have a selections row.
  */
 export const selections = pgTable("selections", {
   id: text("id").primaryKey(),
-  eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }),
   deliverableId: text("deliverable_id")
+    .notNull()
     .references(() => eventDeliverables.id, { onDelete: "cascade" })
     .unique(),
   finalizedAt: text("finalized_at"), // null until the client hits "Finalize Selection"
