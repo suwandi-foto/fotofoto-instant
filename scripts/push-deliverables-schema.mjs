@@ -30,7 +30,7 @@ if (!connectionString) {
 const sql = neon(connectionString);
 
 async function columnExists(table, column) {
-  const { rows } = await sql.query(
+  const rows = await sql.query(
     `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
     [table, column]
   );
@@ -77,7 +77,7 @@ async function main() {
   console.log("    done (harmless if it already was nullable).");
 
   console.log("5/5 Dropping selections.event_id's old unique constraint (if present)...");
-  const { rows: constraints } = await sql.query(`
+  const constraints = await sql.query(`
     SELECT tc.constraint_name
     FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu

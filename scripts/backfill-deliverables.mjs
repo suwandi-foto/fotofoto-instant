@@ -47,9 +47,13 @@ if (!connectionString) {
 const generateId = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 16);
 
 const sql = neon(connectionString);
+// Neon's HTTP driver returns a plain array of rows by default; pass
+// fullResults so query() gives back {rows, rowCount, ...} like
+// node-postgres, which is what rowCount below relies on.
+const q = (text, params = []) => sql.query(text, params, { fullResults: true });
 
 async function main() {
-  const { rows: pendingEvents } = await sql.query(`
+  const { rows: pendingEvents } = await q(`
     SELECT e.id, e.tier, e.quota, e.extra_unit_note
     FROM events e
     WHERE NOT EXISTS (SELECT 1 FROM event_deliverables d WHERE d.event_id = e.id)
@@ -64,20 +68,20 @@ async function main() {
 
   for (const event of pendingEvents) {
     const deliverableId = generateId();
-    await sql.query(
+    await q(
       `INSERT INTO event_deliverables (id, event_id, name, tier, quota, extra_unit_note, status, created_at)
        VALUES ($1, $2, 'All Photos', $3, $4, $5, 'in_progress', now()::text)`,
       [deliverableId, event.id, event.tier, event.quota, event.extra_unit_note]
     );
 
-    const photosRes = await sql.query(
+    const photosRes = await q(
       `UPDATE photos SET deliverable_id = $1 WHERE event_id = $2 AND deliverable_id IS NULL`,
       [deliverableId, event.id]
     );
     photosReassigned += photosRes.rowCount ?? 0;
 
     if (event.tier === "select") {
-      const selRes = await sql.query(
+      const selRes = await q(
         `UPDATE selections SET deliverable_id = $1 WHERE event_id = $2 AND deliverable_id IS NULL`,
         [deliverableId, event.id]
       );
@@ -92,8 +96,8 @@ async function main() {
     `Done this run. Events processed: ${eventsProcessed}, photos reassigned: ${photosReassigned}, selections reassigned: ${selectionsReassigned}`
   );
 
-  const { rows: photoGap } = await sql.query(`SELECT count(*)::int AS n FROM photos WHERE deliverable_id IS NULL`);
-  const { rows: selectionGap } = await sql.query(
+  const { rows: photoGap } = await q(`SELECT count(*)::int AS n FROM photos WHERE deliverable_id IS NULL`);
+  const { rows: selectionGap } = await q(
     `SELECT count(*)::int AS n FROM selections WHERE deliverable_id IS NULL`
   );
   const photosLeft = photoGap[0].n;
