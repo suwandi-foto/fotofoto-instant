@@ -106,15 +106,22 @@ async function completePhoto(event: Event, deliverable: Deliverable, rawKey: str
 }
 
 /**
- * Video counterpart of completePhoto above. Only the fast half of the
- * pipeline (probe + thumbnail) runs inline — the original and
- * thumbnail are stored and the row flips to "processing" before this
- * responds, so the client gets an immediate ack instead of blocking on
- * a full transcode. The slow half (transcodeVideoPreview) runs via
- * after(), same pattern deleteObject(rawKey) already used below it for
- * photos — Hostinger's persistent Node process keeps running it to
- * completion after the response is sent, unlike a serverless function
- * that would need Vercel's after()-keeps-alive guarantee instead.
+ * Video counterpart of completePhoto above. The entire pipeline —
+ * probe, thumbnail extraction, storing the original, and the
+ * transcode — runs via after(), not just the transcode. It used to
+ * only defer the transcode and do probe+thumbnail+original-store
+ * inline, on the theory that step was "the fast half"; in practice
+ * that inline step still means downloading the full raw file back out
+ * of storage and running ffprobe on it before responding at all, and
+ * for a large file (a few hundred MB+) that alone was enough to blow
+ * past the reverse proxy's timeout in front of Hostinger's persistent
+ * Node process — killing the connection with a non-JSON error page
+ * before the client ever saw a real response, which looked to the
+ * photographer like the upload had silently failed. Responding the
+ * instant the row exists, and doing every I/O- and CPU-heavy step in
+ * the background, avoids that regardless of file size — same tradeoff
+ * the transcode step already made (a failure here surfaces only as
+ * the photo row flipping to "failed", not a client-visible error).
  */
 async function completeVideo(event: Event, deliverable: Deliverable, rawKey: string) {
   // Loaded dynamically, and only here, so a plain photo upload (the
@@ -126,36 +133,30 @@ async function completeVideo(event: Event, deliverable: Deliverable, rawKey: str
   const { extractVideoMeta, transcodeVideoPreview } = await import("@/lib/video");
   const photoId = await createQueuedPhoto(event.id, deliverable.id, "original", "video");
 
-  try {
-    const raw = await getObject(rawKey);
-    if (raw.length === 0) {
-      await markPhotoFailed(photoId);
-      return NextResponse.json(
-        { error: "The uploaded video file is empty (0 bytes) — capture may have failed." },
-        { status: 400 }
-      );
-    }
+  after(async () => {
+    try {
+      const raw = await getObject(rawKey);
+      if (raw.length === 0) {
+        console.error(`Video ${photoId}: uploaded file is empty (0 bytes) — capture may have failed.`);
+        await markPhotoFailed(photoId);
+        return;
+      }
 
-    const meta = await extractVideoMeta(raw);
+      const meta = await extractVideoMeta(raw);
 
-    const oKey = videoOriginalKey(event.id, photoId);
-    const tKey = videoThumbnailKey(event.id, photoId);
-    await putObject(oKey, raw);
-    await putObject(tKey, meta.thumbnail);
+      const oKey = videoOriginalKey(event.id, photoId);
+      const tKey = videoThumbnailKey(event.id, photoId);
+      await putObject(oKey, raw);
+      await putObject(tKey, meta.thumbnail);
 
-    await markPhotoProcessing(photoId, {
-      originalPath: oKey,
-      thumbnailPath: tKey,
-      width: meta.width,
-      height: meta.height,
-      orientation: meta.orientation,
-    });
+      await markPhotoProcessing(photoId, {
+        originalPath: oKey,
+        thumbnailPath: tKey,
+        width: meta.width,
+        height: meta.height,
+        orientation: meta.orientation,
+      });
 
-    // The raw upload's own temp copy is no longer needed — `raw` is
-    // already in memory for the background transcode below.
-    after(() => deleteObject(rawKey));
-
-    after(async () => {
       try {
         const watermark = deliverable.tier === "select";
         const preview = await transcodeVideoPreview(raw, meta, watermark);
@@ -173,24 +174,25 @@ async function completeVideo(event: Event, deliverable: Deliverable, rawKey: str
         console.error("Video preview transcode failed", err);
         await markPhotoFailed(photoId);
       }
-    });
+    } catch (err) {
+      console.error("Video processing failed", err);
+      await markPhotoFailed(photoId);
+    } finally {
+      await deleteObject(rawKey).catch(() => {});
+    }
+  });
 
-    return NextResponse.json(
-      {
-        photo: {
-          id: photoId,
-          status: "processing",
-          thumbnailUrl: `/api/photos/${photoId}/thumbnail`,
-          videoReviewUrl: `/e/${event.slug}/video/${photoId}`,
-        },
+  return NextResponse.json(
+    {
+      photo: {
+        id: photoId,
+        status: "queued",
+        thumbnailUrl: `/api/photos/${photoId}/thumbnail`,
+        videoReviewUrl: `/e/${event.slug}/video/${photoId}`,
       },
-      { status: 201 }
-    );
-  } catch (err) {
-    await markPhotoFailed(photoId);
-    console.error("Video processing failed", err);
-    return NextResponse.json({ error: "Processing failed" }, { status: 500 });
-  }
+    },
+    { status: 201 }
+  );
 }
 
 /**
