@@ -17,9 +17,26 @@ import ffmpegPath from "@ffmpeg-installer/ffmpeg";
 import ffprobePath from "@ffprobe-installer/ffprobe";
 import ffmpeg from "fluent-ffmpeg";
 import sharp from "sharp";
+import { chmodSync } from "node:fs";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+// Some hosts' npm install skips postinstall scripts (often the default
+// on CI/build platforms, for supply-chain-security reasons) — that's
+// the step these installer packages rely on to mark their vendored
+// binary executable. The file itself still ends up in node_modules
+// (confirmed: Hostinger production hit this exactly, spawn EACCES on
+// an otherwise-present ffprobe binary), so every ffmpeg/ffprobe spawn
+// fails despite the binary being right where it's expected. Restoring
+// the bit ourselves is idempotent and a no-op when it was already set.
+for (const bin of [ffmpegPath.path, ffprobePath.path]) {
+  try {
+    chmodSync(bin, 0o755);
+  } catch (err) {
+    console.warn(`[video] could not chmod ${bin} executable:`, err);
+  }
+}
 
 ffmpeg.setFfmpegPath(ffmpegPath.path);
 ffmpeg.setFfprobePath(ffprobePath.path);
