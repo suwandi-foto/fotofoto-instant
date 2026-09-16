@@ -96,9 +96,22 @@ function requestError(req: IDBRequest | IDBTransaction, fallbackMessage: string)
     : new Error(domError ? String(domError) : fallbackMessage);
 }
 
+/** Cached connection, reused across every call site. Every queue
+ * operation (enqueue/updateStatus/remove/listAll) used to call
+ * indexedDB.open() fresh and never close it — harmless for one or two
+ * calls, but the 6s drain poll means a shoot running for a few hours
+ * racks up hundreds of simultaneously-open connections. WebKit/Safari
+ * degrades badly once too many connections are open: new transactions
+ * (a cancel's delete, in particular) can hang forever with no error and
+ * no completion, which looks to the user like clicking the X did
+ * nothing at all. Caching one connection avoids that entirely. */
+let dbPromise: Promise<IDBDatabase> | null = null;
+
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
+      dbPromise = null;
       reject(new Error("IndexedDB is not available in this browser context."));
       return;
     }
@@ -106,6 +119,7 @@ function openDb(): Promise<IDBDatabase> {
     try {
       req = indexedDB.open(DB_NAME, 1);
     } catch (err) {
+      dbPromise = null;
       reject(err instanceof Error ? err : new Error("Failed to open the offline queue database."));
       return;
     }
@@ -115,10 +129,26 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(STORE, { keyPath: "id" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(requestError(req, "Failed to open the offline queue database."));
-    req.onblocked = () => reject(new Error("Offline queue database is blocked (open in another tab?)."));
+    req.onsuccess = () => {
+      const db = req.result;
+      // If another tab/version tries to upgrade this DB later, hold onto
+      // the connection isn't safe — drop it and let the next call reopen.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      dbPromise = null;
+      reject(requestError(req, "Failed to open the offline queue database."));
+    };
+    req.onblocked = () => {
+      dbPromise = null;
+      reject(new Error("Offline queue database is blocked (open in another tab?)."));
+    };
   });
+  return dbPromise;
 }
 
 export async function enqueue(item: Omit<QueueItem, "status" | "attempts">): Promise<void> {

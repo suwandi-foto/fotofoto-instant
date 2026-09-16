@@ -112,7 +112,25 @@ export function ShootApp({
   }
 
   async function onCancel(id: string) {
-    await cancelItem(id);
+    try {
+      await cancelItem(id);
+    } catch (err) {
+      // Previously this rejection went unhandled, so a failed cancel
+      // looked to the photographer like the X button just did nothing.
+      console.error("[ShootApp] failed to cancel queue item:", err);
+    }
+    await refreshQueue();
+  }
+
+  async function onClearStuck() {
+    const stuck = queue.filter((q) => q.status === "stuck");
+    for (const item of stuck) {
+      try {
+        await cancelItem(item.id);
+      } catch (err) {
+        console.error("[ShootApp] failed to clear stuck queue item:", err);
+      }
+    }
     await refreshQueue();
   }
 
@@ -336,7 +354,17 @@ export function ShootApp({
 
       {/* Upload queue */}
       <div className="flex flex-col gap-2.5 px-5 py-4">
-        <div className="text-xs font-bold uppercase tracking-wide text-text-dim">Upload queue</div>
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-bold uppercase tracking-wide text-text-dim">Upload queue</div>
+          {queue.some((q) => q.status === "stuck") && (
+            <button
+              onClick={onClearStuck}
+              className="text-xs font-semibold text-red-400 hover:underline"
+            >
+              Clear can&apos;t-upload items
+            </button>
+          )}
+        </div>
         {queue.length === 0 && (
           <p className="text-sm text-text-dim-2">Nothing queued — import a shot above to test the flow.</p>
         )}
